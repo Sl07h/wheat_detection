@@ -1,0 +1,7 @@
+﻿folium==0.12.1
+pandas==1.2.3
+exif
+shapely==1.7.1
+numba==0.53.1
+opencv-python==4.5.1
+scipy==1.6.2
