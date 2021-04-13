@@ -8,7 +8,7 @@ path_to_geojson     = 'data/Field2_3_2019/wheat_plots.geojson'
 latitude            = 54.878876
 longtitude          = 82.9987
 do_show_uncorrect   = False
-grid_sizes          = [1.0, 2.0]
+grid_sizes          = [0.5, 2.0]
 activation_treshold = 0.95
 
 layers = []
@@ -90,7 +90,7 @@ def draw_grid(
         # overlay=False,
         show=False
     )
-
+    
     ratio  = 31.0 * cos(radians(latitude))
     d_lat  = convert_to_decimal(0.0, 0.0, grid_size_m / 31.0)
     d_long = convert_to_decimal(0.0, 0.0, grid_size_m / ratio)
@@ -98,7 +98,6 @@ def draw_grid(
     delta_long = long_max - long_min
     n_lat = int(delta_lat / d_lat)
     n_long = int(delta_long / d_long)
-    print(n_lat, n_long)
 
     wheat_counts = np.zeros((n_lat+1, n_long+1))
     coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
@@ -220,8 +219,8 @@ if __name__ == "__main__":
     long_min = long.min()
     long_max = long.max()
 
+    
     ears_in_polygons = calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears)
-    print(ears_in_polygons)
     
     feature_group_choropleth = folium.FeatureGroup(name='фоновая картограмма', show=True)
     folium.Choropleth(
@@ -247,4 +246,5 @@ if __name__ == "__main__":
 
     m.add_child(folium.map.LayerControl())
 
-    m.save('maps/visualization.html')
+    field_name = path_field_day.split('/')[1]
+    m.save('maps/{}.html'.format(field_name))
