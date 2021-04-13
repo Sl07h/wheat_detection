@@ -51,7 +51,7 @@ https://www.kaggle.com/dataset/7d5f1ed9454c848ecb909c109c6fa8e573ea4de299e249c79
  ┣ 📜lib.py
  ┣ 📜markup.py
  ┗ 📜visualization.py
- 📦weights
+📦weights
 📜.gitignore
 📜README.md
 ```
