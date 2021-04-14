@@ -7,8 +7,8 @@ from lib import *
 path_field_day      = 'data/Field2_3_2019/07_25/'
 path_log_bboxes     = path_field_day + 'log/Field_2_3.frcnn.512.csv'
 path_log_metadata   = path_field_day + 'log/metadata.csv'
-latitude            = 54.878876
-longtitude          = 82.9987
+latitude            = 54.87890
+longtitude          = 82.99877
 do_show_uncorrect   = False
 do_rotate_force     = True
 opacity             = 0.6

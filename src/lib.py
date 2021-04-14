@@ -26,7 +26,7 @@ class BindColormap(MacroElement):
         self.colormap = colormap
         self._template = Template(u"""
         {% macro script(this, kwargs) %}
-            {{this.colormap.get_name()}}.svg[0][0].style.display = 'none';
+            {{this.colormap.get_name()}}.svg[0][0].style.display = 'block';
             {{this._parent.get_name()}}.on('overlayadd', function (eventLayer) {
                 if (eventLayer.layer == {{this.layer.get_name()}}) {
                     {{this.colormap.get_name()}}.svg[0][0].style.display = 'block';
@@ -184,7 +184,7 @@ def draw_protocol(df_metadata, map):
         border      = data['border']
 
         is_OK, color_polyline, popup_str = check_protocol_correctness(filename, yaw, pitch, roll, height)
-        iframe = folium.IFrame(html=popup_str, width=250, height=150)
+        iframe = folium.IFrame(html=popup_str, width=250, height=180)
         folium.PolyLine(border, color=color_polyline) \
             .add_child(folium.Popup(iframe)) \
             .add_to(feature_group_protocol)

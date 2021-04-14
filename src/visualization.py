@@ -5,8 +5,8 @@ path_field_day      = 'data/Field2_3_2019/07_25/'
 path_log_bboxes     = path_field_day + 'log/Field_2_3.frcnn.512.csv'
 path_log_metadata   = path_field_day + 'log/metadata.csv'
 path_to_geojson     = 'data/Field2_3_2019/wheat_plots.geojson'
-latitude            = 54.878876
-longtitude          = 82.9987
+latitude            = 54.87890
+longtitude          = 82.99877
 do_show_uncorrect   = False
 grid_sizes          = [0.5, 2.0]
 activation_treshold = 0.95
@@ -52,7 +52,7 @@ def calc_wheat_intersections(df_i, df_bboxes, df_metadata, adjacent_frames, imag
                     w += 1.0
             bboxes[i][0] = y
             bboxes[i][1] = x
-            bboxes[i][2] = 1.0 / w  # p
+            bboxes[i][2] = 1.0 / w
         return bboxes
     else:
         return []
@@ -86,7 +86,7 @@ def draw_grid(
     global colormaps
 
     feature_group_grid = folium.map.FeatureGroup(
-        name='grid_{:.1f}m'.format(grid_size_m),
+        name='сетка {:.1f}x{:.1f}м²'.format(grid_size_m, grid_size_m),
         # overlay=False,
         show=False
     )
@@ -110,23 +110,23 @@ def draw_grid(
     max_p = np.amax(wheat_counts)
     print(max_p)
 
-    # max_p /= grid_size_m*grid_size_m
-    # lat_cut = grid_size_m * ((delta_lat - n_lat*d_lat) / d_lat)
-    # long_cut = grid_size_m * ((delta_long - n_long*d_long) / d_long)
-    # for i in range(n_lat):
-    #     j = n_long
-    #     wheat_counts[i][j] /= (grid_size_m*lat_cut)
+    max_p /= grid_size_m*grid_size_m
+    lat_cut = grid_size_m * ((delta_lat - n_lat*d_lat) / d_lat)
+    long_cut = grid_size_m * ((delta_long - n_long*d_long) / d_long)
+    for i in range(n_lat):
+        j = n_long
+        wheat_counts[i][j] /= (grid_size_m*lat_cut)
 
-    # for j in range(n_long):
-    #     i = n_lat
-    #     wheat_counts[i][j] /= (grid_size_m*long_cut)
+    for j in range(n_long):
+        i = n_lat
+        wheat_counts[i][j] /= (grid_size_m*long_cut)
 
-    # wheat_counts[n_lat][n_long] /= (lat_cut*long_cut)
+    wheat_counts[n_lat][n_long] /= (lat_cut*long_cut)
 
-    # for i in range(n_lat):
-    #     for j in range(n_long):
-    #         if wheat_counts[i][j] > 0:
-    #             wheat_counts[i][j] /= (grid_size_m**2)
+    for i in range(n_lat):
+        for j in range(n_long):
+            if wheat_counts[i][j] > 0:
+                wheat_counts[i][j] /= (grid_size_m**2)
 
     # divide count of objects by region area
     for i in range(n_lat):
@@ -162,9 +162,59 @@ def draw_grid(
                     .add_to(feature_group_grid)
 
     colormap = folium.LinearColormap(['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-    colormap.caption = 'Количество колосков в квадрате {:.1f}x{:.1f} m'.format(grid_size_m, grid_size_m)
+    colormap.caption = 'плотность колосьев, шт/м²'
     layers.append(feature_group_grid)
     colormaps.append(colormap)
+
+
+# считаем сколько колосков в каждом полигоне, размеченном агрономом
+# ВНИМАНИЕ в geojson координаты в другом порядке
+def draw_with_geojson(path_to_geojson, wheat_ears, m):
+    feature_group_choropleth = folium.FeatureGroup(name='фоновая картограмма', show=True)
+    with open(path_to_geojson) as f:
+        data = json.load(f)
+        num_of_polygons = len(data['features'])
+        ears_in_polygons = np.ones(num_of_polygons)
+        for i in range(num_of_polygons):
+            t = np.array(data['features'][i]['geometry']['coordinates'][0][:4])
+            # docs.scipy.org/doc/numpy/reference/arrays.indexing.html#advanced-indexing
+            t[:,[0, 1]] = t[:,[1, 0]]
+            wheat_plot_polygon = Polygon(t)
+            for wheat_ear in wheat_ears:
+                point = Point(np.array(wheat_ear[:2]))
+                if wheat_plot_polygon.contains(point):
+                    ears_in_polygons[i] += wheat_ear[2]
+
+        max_p = np.amax(ears_in_polygons)
+        for i in range(num_of_polygons):
+            # max_p:  val = 1  ->  (0,255,0)
+            # min_p:  val = 0  ->  (221,221,221)
+            val = ears_in_polygons[i] / max_p
+            hex_val = hex(int((1 - val) * 221))[2:]
+            if len(hex_val) == 1:
+                hex_val = '0'+hex_val
+            color = '#{}dd{}'.format(hex_val, hex_val)
+
+            t = np.array(data['features'][i]['geometry']['coordinates'][0])
+            t[:,[0, 1]] = t[:,[1, 0]]
+            folium.Polygon(t,
+                                color='#303030',
+                                opacity=0.05,
+                                fill=True,
+                                fill_color=color,
+                                fill_opacity=1.0
+                                )\
+                .add_child(folium.Popup(str(ears_in_polygons[i]))) \
+                .add_to(feature_group_choropleth)
+    
+    colormap = folium.LinearColormap(['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
+    colormap.caption = 'количество колосьев на делянках, шт'
+
+    m.add_child(feature_group_choropleth)
+    m.add_child(colormap)
+    m.add_child(BindColormap(feature_group_choropleth, colormap))
+
+
 
 
 # считаем сколько колосков в каждом полигоне, размеченном агрономом
@@ -220,14 +270,15 @@ if __name__ == "__main__":
     long_max = long.max()
 
     
-    ears_in_polygons = calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears)
+    # ears_in_polygons = calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears)
     
-    feature_group_choropleth = folium.FeatureGroup(name='фоновая картограмма', show=True)
-    folium.Choropleth(
-        path_to_geojson,
-        pd.Series(ears_in_polygons)
-    ).add_to(feature_group_choropleth)
-    feature_group_choropleth.add_to(m)
+    draw_with_geojson(path_to_geojson, wheat_ears, m)
+    # feature_group_choropleth = folium.FeatureGroup(name='фоновая картограмма', show=True)
+    # folium.Choropleth(
+    #     path_to_geojson,
+    #     pd.Series(ears_in_polygons)
+    # ).add_to(feature_group_choropleth)
+    # feature_group_choropleth.add_to(m)
 
 
     for grid_size in grid_sizes:
@@ -244,7 +295,7 @@ if __name__ == "__main__":
     for layer, colormap in zip(layers, colormaps):
         m.add_child(BindColormap(layer, colormap))
 
-    m.add_child(folium.map.LayerControl())
+    m.add_child(folium.map.LayerControl(collapsed=False))
 
     field_name = path_field_day.split('/')[1]
     m.save('maps/{}.html'.format(field_name))
