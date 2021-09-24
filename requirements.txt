@@ -9,3 +9,4 @@ torch==1.8.1
 torchvision==0.9.1
 torchaudio==0.8.1
 scikit-image==0.18.1
+effdet==0.2.4
