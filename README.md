@@ -56,9 +56,10 @@ wheat_plots.geojson размечается вручную 1 раз за сезо
 
 
 
-[Веса сети faster rcnn с kaggle](
+[Веса сети faster r-cnn](
 https://www.kaggle.com/dataset/7d5f1ed9454c848ecb909c109c6fa8e573ea4de299e249c79edc6f47660bf4c5?select=fasterrcnn_resnet50_fpn_best.pth
 )
-[Веса сети efficient det с kaggle](
+
+[Веса сети efficient det](
 https://www.kaggle.com/shonenkov/inference-efficientdet/data?select=fold0-best-all-states.bin
 )
