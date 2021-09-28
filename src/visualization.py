@@ -244,8 +244,8 @@ if __name__ == "__main__":
     base_map.add_to(m)
 
     filenames = os.listdir(path_field_day + 'src')
+    make_dirs(path_field_day)
     if not os.path.exists(path_log_metadata):
-        make_dirs(path_field_day)
         handle_metadata(filenames, path_field_day)
 
     # считываем метаданные и координаты колосков
