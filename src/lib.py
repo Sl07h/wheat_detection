@@ -202,6 +202,17 @@ def handle_metadata(filenames, path_field_day):
     # Image_24.jpg   False   12   7    45.67    45.67    6.0     130    -60     0.0   [[], [], [], []]
     # ...
     try:
+        for filename in filenames:
+            path_img = path_field_day + 'src/' + filename
+            path_csv = path_field_day + 'tmp/' + filename[:-4] + '.csv'
+            command = 'exiftool -csv {} > {}'.format(path_img, path_csv)
+            os.system(command)
+            df = pd.read_csv(path_csv, header=None).T
+            df.to_csv(path_csv, header=False, index=False)
+    except:
+        print('Ошибка при выделении данных через exiftool')
+
+    try:
         list_name = []
         list_is_OK = []
         list_W = []
@@ -213,14 +224,10 @@ def handle_metadata(filenames, path_field_day):
         list_pitch = []
         list_roll = []
         list_border = []
+    
         for filename in filenames:
             path_img = path_field_day + 'src/' + filename
             path_csv = path_field_day + 'tmp/' + filename[:-4] + '.csv'
-            command = 'exiftool -csv {} > {}'.format(path_img, path_csv)
-            os.system(command)
-            df = pd.read_csv(path_csv, header=None).T
-            df.to_csv(path_csv, header=False, index=False)
-
             with open(path_img, 'rb') as image_file:
                 my_image = Image(image_file)
                 latitude = convert_to_decimal(*my_image.gps_latitude)
@@ -245,33 +252,35 @@ def handle_metadata(filenames, path_field_day):
             list_pitch.append(pitch)
             list_roll.append(roll)
             list_border.append(border)
-    except:
-        print('Ошибка при выделении данных через exiftool')
 
-    df_metadata = pd.DataFrame(
-        list(zip(
-            list_name,
-            list_is_OK,
-            list_W,
-            list_H,
-            list_lat,
-            list_long,
-            list_height,
-            list_yaw,
-            list_pitch,
-            list_roll,
-            list_border
-        )), columns=[
-            'name',
-            'is_OK',
-            'W',
-            'H',
-            'lat',
-            'long',
-            'height',
-            'yaw',
-            'pitch',
-            'roll',
-            'border'
-        ])
-    df_metadata.to_csv(path_field_day + 'log/metadata.csv', index=False)
+        df_metadata = pd.DataFrame(
+            list(zip(
+                list_name,
+                list_is_OK,
+                list_W,
+                list_H,
+                list_lat,
+                list_long,
+                list_height,
+                list_yaw,
+                list_pitch,
+                list_roll,
+                list_border
+            )), columns=[
+                'name',
+                'is_OK',
+                'W',
+                'H',
+                'lat',
+                'long',
+                'height',
+                'yaw',
+                'pitch',
+                'roll',
+                'border'
+            ])
+        df_metadata.to_csv(path_field_day + 'log/metadata.csv', index=False)
+
+    except:
+        print('Ошибка при формировании датафрейма')
+

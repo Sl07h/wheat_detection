@@ -270,9 +270,9 @@ if __name__ == "__main__":
     long_max = long.max()
 
     
-    # ears_in_polygons = calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears)
-    
+    ears_in_polygons = calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears)
     draw_with_geojson(path_to_geojson, wheat_ears, m)
+    
     # feature_group_choropleth = folium.FeatureGroup(name='фоновая картограмма', show=True)
     # folium.Choropleth(
     #     path_to_geojson,
