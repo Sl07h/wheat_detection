@@ -1,14 +1,16 @@
 from lib import *
 
 
-path_field_day      = 'data/Field2_3_2019/07_25/'
-path_log_bboxes     = path_field_day + 'log/Field_2_3.frcnn.512.csv'
+# path_field_day      = 'data/Field_2021/1st_attempt/'
+# path_log_bboxes     = path_field_day + 'log/Field_2021_1.frcnn.512.csv'
+# path_log_metadata   = path_field_day + 'log/metadata.csv'
+# path_to_geojson     = 'data/Field_2021/wheat_plots.geojson'
+path_field_day      = 'data/Field2_3_2019/'
+path_log_bboxes     = path_field_day + 'log/Field2_3_2019.frcnn.512.csv'
 path_log_metadata   = path_field_day + 'log/metadata.csv'
 path_to_geojson     = 'data/Field2_3_2019/wheat_plots.geojson'
-latitude            = 54.87890
-longtitude          = 82.99877
 do_show_uncorrect   = False
-grid_sizes          = [0.5, 2.0]
+grid_sizes          = [0.15, 0.5]
 activation_treshold = 0.95
 
 layers = []
@@ -237,14 +239,10 @@ def calc_wheat_head_count_in_geojsons(path_to_geojson, wheat_ears):
 
 
 if __name__ == "__main__":
-    m = folium.Map([latitude, longtitude], tiles=None,
-                   prefer_canvas=True, control_scale=True, zoom_start=21)
-    base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
-    folium.TileLayer(tiles='OpenStreetMap', max_zoom=23).add_to(base_map)
-    base_map.add_to(m)
 
     filenames = os.listdir(path_field_day + 'src')
     make_dirs(path_field_day)
+
     if not os.path.exists(path_log_metadata):
         handle_metadata(filenames, path_field_day)
 
@@ -252,6 +250,15 @@ if __name__ == "__main__":
     df_bboxes = pd.read_csv(path_log_bboxes)
     df_metadata = pd.read_csv(path_log_metadata)
     df_metadata['border'] = df_metadata['border'].apply(lambda x: json.loads(x))
+    latitude    = float(df_metadata['lat'][0])
+    longtitude  = float(df_metadata['long'][0])
+    m = folium.Map([latitude, longtitude], tiles=None,
+                   prefer_canvas=True, control_scale=True, zoom_start=21)
+    base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
+    folium.TileLayer(tiles='OpenStreetMap', max_zoom=23).add_to(base_map)
+    base_map.add_to(m)
+
+
     # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
     image_centers = list(df_metadata.apply(lambda x: [x.lat, x.long], axis=1))
     image_borders = list(df_metadata['border'])

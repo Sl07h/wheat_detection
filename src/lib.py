@@ -47,15 +47,18 @@ def try_to_make_dir(path):
         print('Папка {} уже существует'.format(path))
 
 
-# создаём папки maps, mod, log, tmp
+# создаём папки maps, mod, log, tmp, veg
 def make_dirs(path_folder):
     try_to_make_dir('maps')
+    try_to_make_dir('weights')
     # сжатые и повёрнутые изображения для карты, чтобы разметить делянки вручную
     try_to_make_dir(path_folder + 'mod')
     # готовые метаданные всех изображений в папке и распознанные
     try_to_make_dir(path_folder + 'log')
     # временные csv файлы
     try_to_make_dir(path_folder + 'tmp')
+    # индексы вегетации
+    try_to_make_dir(path_folder + 'veg')
 
 
 # преобразуем градусы, минуты и секунды в вешественную переменную координаты
@@ -201,16 +204,20 @@ def handle_metadata(filenames, path_field_day):
     # Image_23.jpg   True    5    3    12.34    12.34    2.7     120    -90     0.0   [[], [], [], []]
     # Image_24.jpg   False   12   7    45.67    45.67    6.0     130    -60     0.0   [[], [], [], []]
     # ...
-    try:
-        for filename in filenames:
-            path_img = path_field_day + 'src/' + filename
-            path_csv = path_field_day + 'tmp/' + filename[:-4] + '.csv'
-            command = 'exiftool -csv {} > {}'.format(path_img, path_csv)
-            os.system(command)
-            df = pd.read_csv(path_csv, header=None).T
-            df.to_csv(path_csv, header=False, index=False)
-    except:
-        print('Ошибка при выделении данных через exiftool')
+    src_file_count = len(os.listdir(path_field_day + 'src'))
+    tmp_file_count = len(os.listdir(path_field_day + 'tmp'))
+    print(src_file_count, tmp_file_count)
+    if src_file_count != tmp_file_count:
+        try:
+            for filename in filenames:
+                path_img = path_field_day + 'src/' + filename
+                path_csv = path_field_day + 'tmp/' + filename[:-4] + '.csv'
+                command = 'exiftool -csv {} > {}'.format(path_img, path_csv)
+                os.system(command)
+                df = pd.read_csv(path_csv, header=None).T
+                df.to_csv(path_csv, header=False, index=False)
+        except:
+            print('Ошибка при выделении данных через exiftool')
 
     try:
         list_name = []
@@ -232,12 +239,16 @@ def handle_metadata(filenames, path_field_day):
                 my_image = Image(image_file)
                 latitude = convert_to_decimal(*my_image.gps_latitude)
                 longtitude = convert_to_decimal(*my_image.gps_longitude)
-            df = pd.read_csv(path_csv, header=None)
-            pitch = float(df.iloc[48].values[1])
-            yaw = float(df.iloc[49].values[1])
-            roll = float(df.iloc[50].values[1])
-            height = float(df.iloc[84].values[1])
-            fov = float(df.iloc[130].values[1].split()[0])
+            df = pd.read_csv(path_csv, index_col=0).T
+            print(filename)
+            pitch = float(df['GimbalPitchDegree'][0])       # Костыль
+            yaw   = float(df['FlightYawDegree'][0])         # Костыль
+            roll  = float(df['GimbalRollDegree'][0])        # Костыль
+            #w = float(df['ImageWidth'][0])
+            #h = float(df['ImageHeight'][0])
+            height = float(df['RelativeAltitude'][0])
+            fov = float(df['FOV'][0].split()[0])
+            print(pitch, yaw, roll, height, fov)
 
             is_OK, _, _ = check_protocol_correctness(filename, yaw, pitch, roll, height)
             W, H, _, border = calc_image_border(latitude, longtitude, height, fov, yaw)

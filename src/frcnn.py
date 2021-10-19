@@ -140,7 +140,7 @@ for batch_images, batch_image_names in test_data_loader:
     boxes_list, scores_list = fix_coordinates(pos_list, boxes_list, scores_list, W // kernel_size)
 
     result = {
-        'image_id': image_ids[0],
+        'image_id': batch_image_names[0],
         'PredictionString': format_prediction_string(boxes_list, scores_list)
     }
     results.append(result)

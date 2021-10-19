@@ -4,11 +4,9 @@ from scipy.ndimage import rotate as rotate_sp
 from lib import *
 
 
-path_field_day      = 'data/Field2_3_2019/07_25/'
+path_field_day      = 'data/Field2_3_2019/'
 path_log_bboxes     = path_field_day + 'log/Field_2_3.frcnn.512.csv'
 path_log_metadata   = path_field_day + 'log/metadata.csv'
-latitude            = 54.87890
-longtitude          = 82.99877
 do_show_uncorrect   = False
 do_rotate_force     = True
 opacity             = 0.6
@@ -63,11 +61,7 @@ def draw_image_on_map(i, df_metadata, do_rewrite):
 
 
 if __name__ == "__main__":
-    m = folium.Map([latitude, longtitude], tiles=None,
-                   prefer_canvas=True, control_scale=True, zoom_start=21)
-    base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
-    folium.TileLayer(tiles='OpenStreetMap', max_zoom=24).add_to(base_map)
-    base_map.add_to(m)
+
 
     filenames = os.listdir(path_field_day + 'src')
     if not os.path.exists(path_log_metadata):
@@ -77,6 +71,13 @@ if __name__ == "__main__":
     df_metadata = pd.read_csv(path_log_metadata)
     df_metadata['border'] = df_metadata['border'].apply(
         lambda x: json.loads(x))
+    latitude    = float(df_metadata['lat'][0])
+    longtitude  = float(df_metadata['long'][0])
+    m = folium.Map([latitude, longtitude], tiles=None,
+                   prefer_canvas=True, control_scale=True, zoom_start=21)
+    base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
+    folium.TileLayer(tiles='OpenStreetMap', max_zoom=24).add_to(base_map)
+    base_map.add_to(m)
 
     feature_group_yaw = folium.FeatureGroup(
         name='rotate_by_yaw', overlay=False)

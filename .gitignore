@@ -1,5 +1,7 @@
 data
 maps
 weights
+wd_venv
+research
 */__pycache__
 .vscode
