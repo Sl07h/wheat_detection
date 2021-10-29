@@ -241,9 +241,9 @@ def handle_metadata(filenames, path_field_day):
                 longtitude = convert_to_decimal(*my_image.gps_longitude)
             df = pd.read_csv(path_csv, index_col=0).T
             print(filename)
-            pitch = float(df['GimbalPitchDegree'][0])       # Костыль
+            pitch = float(df['FlightPitchDegree'][0])       # Костыль
             yaw   = float(df['FlightYawDegree'][0])         # Костыль
-            roll  = float(df['GimbalRollDegree'][0])        # Костыль
+            roll  = float(df['FlightRollDegree'][0])        # Костыль
             #w = float(df['ImageWidth'][0])
             #h = float(df['ImageHeight'][0])
             height = float(df['RelativeAltitude'][0])
