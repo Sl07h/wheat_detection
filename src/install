@@ -1,0 +1,12 @@
+﻿# 1. install exiftool
+wget https://github.com/exiftool/exiftool/archive/refs/tags/12.34.zip;
+7z x 12.34.zip;
+rm 12.34.zip;
+
+# 2. create virtual enviroment
+python -m venv wd_venv
+
+# 3. install python libraries
+pip install -r requirements.txt
+
+# TODO: 4. download model weights

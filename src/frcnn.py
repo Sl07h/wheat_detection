@@ -1,4 +1,4 @@
-﻿# https://pytorch.org/tutorials/intermediate/torchvision_tutorial.html
+# https://pytorch.org/tutorials/intermediate/torchvision_tutorial.html
 import pandas as pd
 import numpy as np
 import cv2
@@ -14,29 +14,36 @@ from torchvision.transforms import ToTensor
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.utils import save_image
 from torch.utils.data import Dataset, DataLoader
-
 
 results = []
 
 detection_threshold = 0.5
-batch_size = 1
+batch_size = 2
 kernel_size = 512
-stride_size = 512
+stride_size = 256
 num_classes = 2
 
+
+#path_field_day      = 'data/test_folder/'
+#path_log_bboxes     = f'{path_field_day}log/test_folder.frcnn.{kernel_size}.csv'
+#path_field_day      = 'data/Field_2021_1/'
+#path_log_bboxes     = f'{path_field_day}log/Field_2021_1.frcnn.{kernel_size}.csv'
 path_field_day      = 'data/Field2_3_2019/07_25/'
-path_log_bboxes     = path_field_day + 'log/Field_2_3.frcnn.512.csv'
+path_log_bboxes     = path_field_day + 'log/Field2_3_2019.frcnn.512.csv'
+
 path_to_weight      = 'weights/fasterrcnn_resnet50_fpn_best.pth'
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-
+# TODO: fix non-maximum supression
 # https://discuss.pytorch.org/t/how-to-load-images-from-different-folders-in-the-same-batch/18942
 class WheatTestDataset(Dataset):
 
     def __init__(self, dir):
         self.dir = dir
-        self.image_names = os.listdir(self.dir)
+        self.image_names = os.listdir(self.dir)[:1]
+        print(self.image_names)
 
     def __len__(self):
         return len(self.image_names)
@@ -44,6 +51,7 @@ class WheatTestDataset(Dataset):
     def __getitem__(self, index):
         image_name = self.image_names[index]
         path = os.path.join(self.dir, image_name)
+        print(path)
         image = io.imread(path)
         H, W, _ = image.shape
         pad_w = kernel_size - W % kernel_size
@@ -53,7 +61,10 @@ class WheatTestDataset(Dataset):
         if W % kernel_size == 0:
             pad_w=0
         new_image = np.zeros((H+pad_h, W+pad_w, 3))
-        new_image[:-pad_h, :-pad_w, :] = image
+        if pad_w == 0 and pad_h == 0:
+            new_image = image
+        else:
+            new_image[:-pad_h, :-pad_w, :] = image
         
         new_image = new_image.transpose((2, 0, 1))
         img_tensor = new_image.astype(np.float32)
@@ -74,8 +85,8 @@ def format_prediction_string(boxes, scores):
 
 def fix_coordinates(list_i, list_bbox, list_prob, W_boxes):
     for i, bbox, prob in zip(list_i, list_bbox, list_prob):
-        x = (i % W_boxes) * kernel_size
-        y = (i // W_boxes) * kernel_size
+        x = (i % W_boxes) * stride_size
+        y = (i // W_boxes) * stride_size
         # print(x,y)
         for i in range(bbox.shape[0]):
             bbox[i][0] += x 
@@ -118,6 +129,9 @@ for batch_images, batch_image_names in test_data_loader:
     pos_list = []
     boxes_list = []
     scores_list = []
+    
+    #for i, patch in enumerate(patches_unfold):
+    #    save_image(patch, f'data/test_folder/qwe/{i}.png')
 
     for k in range(patches.shape[0]//batch_size):
         batch = patches[k*batch_size:(k+1)*batch_size]
@@ -137,8 +151,31 @@ for batch_images, batch_image_names in test_data_loader:
             scores_list.append(scores)
             pos_list.append(k*batch_size+i)
 
-    boxes_list, scores_list = fix_coordinates(pos_list, boxes_list, scores_list, W // kernel_size)
-
+    boxes_list, scores_list = fix_coordinates(pos_list, boxes_list, scores_list, W // stride_size - 1)
+    print(boxes_list.dtype)
+    print(scores_list.dtype)
+    boxes_list = torch.from_numpy(boxes_list.astype(float))
+    scores_list = torch.from_numpy(scores_list.astype(float))
+    
+    # X,Y,W,H -> (x0,y0), (x1,y1)
+    boxes_list[:, 2] = boxes_list[:, 2] + boxes_list[:, 0]
+    boxes_list[:, 3] = boxes_list[:, 3] + boxes_list[:, 1]
+    #boxes_list[:,0] /= W
+    #boxes_list[:,2] /= W
+    #boxes_list[:,1] /= H
+    #boxes_list[:,3] /= H
+    print(boxes_list[0])
+    qwe = sorted(torchvision.ops.nms(boxes_list, scores_list, 0.8).tolist())
+    boxes_list = boxes_list.numpy()
+    scores_list = scores_list.numpy()
+    print(boxes_list.shape, boxes_list.dtype)
+    print(type(qwe))
+    
+    boxes_list = boxes_list[qwe]
+    scores_list = scores_list[qwe]
+    # (x0,y0), (x1,y1) -> X,Y,W,H
+    boxes_list[:, 2] = boxes_list[:, 2] - boxes_list[:, 0]
+    boxes_list[:, 3] = boxes_list[:, 3] - boxes_list[:, 1]
     result = {
         'image_id': batch_image_names[0],
         'PredictionString': format_prediction_string(boxes_list, scores_list)
