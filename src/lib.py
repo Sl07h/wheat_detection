@@ -1,6 +1,7 @@
 ﻿import folium
 import json
 import os
+import sys
 import numpy as np
 import pandas as pd
 from branca.element import MacroElement
@@ -207,12 +208,17 @@ def handle_metadata(filenames, path_field_day):
     src_file_count = len(os.listdir(path_field_day + 'src'))
     tmp_file_count = len(os.listdir(path_field_day + 'tmp'))
     print(src_file_count, tmp_file_count)
+
+    exiftool_script_name = 'exiftool'
+    if sys.platform == 'win32':
+        exiftool_script_name = 'windows_exiftool'
+
     if src_file_count != tmp_file_count:
         try:
             for filename in filenames:
                 path_img = path_field_day + 'src/' + filename
                 path_csv = path_field_day + 'tmp/' + filename[:-4] + '.csv'
-                command = 'exiftool-12.34/exiftool -csv {} > {}'.format(path_img, path_csv)
+                command = 'exiftool-12.34/{} -csv {} > {}'.format(exiftool_script_name, path_img, path_csv)
                 os.system(command)
                 df = pd.read_csv(path_csv, header=None).T
                 df.to_csv(path_csv, header=False, index=False)
