@@ -62,7 +62,7 @@ class WheatDetectionSystem():
 
                 str_wheat_type = ''
                 try:
-                    str_wheat_type = data['features'][i]['properties']['name'] + '\n'
+                    str_wheat_type = data['features'][i]['properties']['name']
                 except:
                     pass
 
@@ -73,10 +73,9 @@ class WheatDetectionSystem():
                                fill_color=color,
                                fill_opacity=1.0
                                )\
-                    .add_child(folium.Popup(str_wheat_type + str(self.ears_in_polygons[i]))) \
+                    .add_child(folium.Popup(f'{str_wheat_type}\n{self.ears_in_polygons[i]}')) \
                     .add_to(feature_group_choropleth)
-                df.append(
-                    {'сорт': str_wheat_type, 'количество колосьев': self.ears_in_polygons[i]}, ignore_index=True)
+                df = df.append({'сорт': str_wheat_type, 'количество колосьев': self.ears_in_polygons[i]}, ignore_index=True)
 
         colormap = folium.LinearColormap(
             ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
