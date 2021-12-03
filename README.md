@@ -23,12 +23,10 @@
  ┗ 📜markup.html
 📦src
  ┣ 📜clean.py
- ┣ 📜effdetpy
- ┣ 📜frcnn.py
  ┣ 📜install
- ┣ 📜lib.py
+ ┣ 📜main.py
  ┣ 📜markup.py
- ┗ 📜visualization.py
+ ┗ 📜wds.py
 📦weights
 📜.gitignore
 📜README.md
