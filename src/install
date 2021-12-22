@@ -13,6 +13,7 @@ python -m venv wd_venv
 pip install -r requirements.txt
 
 # 5. download model weights
+mkdir weights
 cd weights
 #5.1 frcnn
 wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1nCK-yJ-Y8jTg-hENr31HXNMGTb2OuYgV' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1nCK-yJ-Y8jTg-hENr31HXNMGTb2OuYgV" -O qwe.zip && rm -rf /tmp/cookies.txt
