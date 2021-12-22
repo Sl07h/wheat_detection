@@ -1,11 +1,11 @@
-﻿folium==0.12.1
+﻿effdet==0.2.4
+torch
+torchvision
+
+folium==0.12.1
 pandas==1.2.3
 exif==1.3.2
 shapely==1.7.1
 numba==0.53.1
-scipy==1.6.2
-torch==1.8.1
-torchvision==0.9.1
-scikit-image==0.18.1
-effdet==0.2.4
+
 opencv-python==4.5.3.56
