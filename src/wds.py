@@ -1,4 +1,4 @@
-﻿import folium
+import folium
 import json
 import cv2
 import gc
@@ -19,9 +19,6 @@ from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torch.utils.data import Dataset, DataLoader
 
-#from effdet import get_efficientdet_config, EfficientDet, DetBenchEval
-#from effdet.efficientdet import HeadNet
-
 from effdet.config import get_efficientdet_config
 from effdet.efficientdet import EfficientDet, HeadNet
 from effdet.bench import DetBenchPredict
@@ -39,10 +36,12 @@ class WheatDetectionSystem():
         activation_treshold: int = 0.7,  # 0.7
     ):
         self.path_field_day    = f'data/{field}/{attempt}'
-        self.path_log_metadata = f'data/{field}/{attempt}/log/metadata.csv'
-        self.path_log_bboxes   = f'data/{field}/{attempt}/log/bboxes.{field}.{attempt}.{cnn_model}.{kernel_size}.csv'
-        self.path_log_plots    = f'data/{field}/{attempt}/log/result.{field}.{attempt}.{cnn_model}.{kernel_size}.csv'
-        self.path_to_geojson   = f'data/{field}/wheat_plots.geojson'
+        prefix_string = f'data/{field}/{attempt}/log/{field}.{attempt}.{cnn_model}.{kernel_size}'
+        self.path_log_metadata = f'{prefix_string}.metadata.csv'
+        self.path_log_bboxes   = f'{prefix_string}.bboxes.csv'
+        self.path_log_plots    = f'{prefix_string}.result.csv'
+        self.path_to_geojson   = f'data/{field}/{field}.geojson'
+        self.path_to_map       = f'maps/{field}.{attempt}.{cnn_model}.{kernel_size}.html'
         self.cnn_model = cnn_model
         self.kernel_size = int(kernel_size)
         self.do_show_uncorrect = do_show_uncorrect
@@ -52,33 +51,51 @@ class WheatDetectionSystem():
         self.layers = []
         self.colormaps = []
         # сокрытые от пользователя операции
-        make_dirs(self.path_field_day)
+        make_dirs(self.path_field_day)        
+
+    def read_metadata(self):
+        if not os.path.exists(self.path_log_metadata):
+            handle_metadata(self.filenames, self.path_field_day, self.path_log_metadata)
+
+        self.df_metadata = pd.read_csv(self.path_log_metadata)
+        self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
+        print(f'Считал файл: {self.path_log_metadata}')
+        self.latitude = float(self.df_metadata['lat'][0])
+        self.longtitude = float(self.df_metadata['long'][0])
+        # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
+        self.image_borders = list(self.df_metadata['border'])
+        lat = np.array(self.image_borders).flatten()[::2]
+        long = np.array(self.image_borders).flatten()[1::2]
+        self.lat_min = lat.min()
+        self.lat_max = lat.max()
+        self.long_min = long.min()
+        self.long_max = long.max()
+
+    def read_bboxes(self):
+        '''
+        1. производим детекцию колосьев (если надо)
+        2. считываем файл с диска '''
         if not os.path.exists(self.path_log_bboxes):
             self._detect_wheat_heads()
-        else:
-            print(f'Найден файл: {self.path_log_bboxes}')
-        if not os.path.exists(self.path_log_metadata):
-            print(f'Нет файла: {self.path_log_metadata}. Собираю:')
-            handle_metadata(self.filenames, self.path_field_day)
-        else:
-            print(f'Найден файл: {self.path_log_metadata}')
-        self._read_metadata()
-        
-        # считаем колосья в прямоугольниках карты плотности и делянках
+
+        self.df_bboxes = pd.read_csv(self.path_log_bboxes)
+        print(f'Считал файл: {self.path_log_bboxes}')
+
+    def perform_calculations(self):
+        ''' считаем колосья в прямоугольниках карты плотности и делянках '''
         self.adjacent_frames = find_intersections(self.image_borders)
         print('Нашёл пересечение кадров')
         n = len(self.filenames)
         for i in range(n):
             print(f'{i} / {n}')
             self.wheat_ears += self._calc_wheat_intersections(i)
-
         self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
-        self._create_map()
+
 
     def draw_wheat_plots(self):
         ''' отрисовка числа колосьев на каждой делянке '''
         feature_group_choropleth = folium.FeatureGroup(
-            name='фоновая картограмма', show=True)
+            name='делянки', show=True)
         df = pd.DataFrame(columns=['сорт', 'количество колосьев'])
         with open(self.path_to_geojson) as f:
             data = json.load(f)
@@ -147,47 +164,44 @@ class WheatDetectionSystem():
         for size in size_list:
             self._draw_grid(size)
 
-    def save_map(self):
-        ''' соединяем слои, карты цветов и сохраняем карту '''
-        for layer in self.layers:
-            self.m.add_child(layer)
-        for colormap in self.colormaps:
-            self.m.add_child(colormap)
+    def draw_images_on_map(self, do_rewrite=False):
+        max_image_size = 400
+        feature_group_mod = folium.FeatureGroup(name='rotate_by_gimbal_yawº')
+        for i in range(len(self.filenames)):
+            data = self.df_metadata.loc[i]
+            filename = data['name']
+            is_OK = data['is_OK']
+            height = data['height']
+            yaw = data['gimbal_yaw']
+            border = data['border']
 
-        for layer, colormap in zip(self.layers, self.colormaps):
-            self.m.add_child(BindColormap(layer, colormap))
+            path_img_src = r'{}/src/{}'.format(self.path_field_day, filename)
+            path_img_mod = r'{}/mod/{}.png'.format(self.path_field_day, filename[:-4])
 
-        Draw(export=True).add_to(self.m)
-        MeasureControl(collapsed=False).add_to(self.m)
-        folium.map.LayerControl(collapsed=False).add_to(self.m)
+            if not os.path.exists(path_img_mod) or do_rewrite and is_OK:
+                image = cv2.imread(path_img_src)
+                h, w, _ = image.shape
+                image_src = cv2.resize(image, (max_image_size, int(float(max_image_size*h)/w)))
+                image = rotate_image(image_src, -yaw)
+                trans_mask = image[:,:,2] == 0
+                new_image = cv2.cvtColor(image, cv2.COLOR_RGB2RGBA)
+                new_image[trans_mask] = [0,0,0,0]
+                cv2.imwrite(path_img_mod, new_image)
 
-        field_name = self.path_field_day.split('/')[1]
-        self.m.save(f'maps/{field_name}.{self.kernel_size}.html')
-
-    # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------
-
-    def _read_metadata(self):
-        ''' считываем метаданные и сохраняем промежуточные значения '''
-        self.df_bboxes = pd.read_csv(self.path_log_bboxes)
-        self.df_metadata = pd.read_csv(self.path_log_metadata)
-        self.df_metadata['border'] = self.df_metadata['border'].apply(
-            lambda x: json.loads(x))
-        self.latitude = float(self.df_metadata['lat'][0])
-        self.longtitude = float(self.df_metadata['long'][0])
-        # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
-        self.image_borders = list(self.df_metadata['border'])
-        lat = np.array(self.image_borders).flatten()[::2]
-        long = np.array(self.image_borders).flatten()[1::2]
-        self.lat_min = lat.min()
-        self.lat_max = lat.max()
-        self.long_min = long.min()
-        self.long_max = long.max()
-        print(f'Считал файл: {self.path_log_bboxes}')
-        print(f'Считал файл: {self.path_log_metadata}')
-
-    def _create_map(self):
+            ar = np.array(border).T
+            bounds = [[np.min(ar[0]), np.min(ar[1])], [np.max(ar[0]), np.max(ar[1])]]
+            if is_OK:
+                img = folium.raster_layers.ImageOverlay(
+                    name="Инструмент для разметки делянок",
+                    image=path_img_mod,
+                    bounds=bounds,
+                    opacity=1.0,
+                    control=False,
+                    zindex=1,
+                ).add_to(feature_group_mod)
+        feature_group_mod.add_to(self.m)
+        
+    def create_map(self):
         ''' создаём карту и сохраняем объект карты как об приватное поле  '''
         self.m = folium.Map(
             [self.latitude, self.longtitude],
@@ -201,6 +215,26 @@ class WheatDetectionSystem():
         folium.TileLayer(tiles='OpenStreetMap', max_zoom=23).add_to(base_map)
         base_map.add_to(self.m)
 
+    def save_map(self):
+        ''' соединяем слои, карты цветов и сохраняем карту '''
+        for layer in self.layers:
+            self.m.add_child(layer)
+        for colormap in self.colormaps:
+            self.m.add_child(colormap)
+
+        for layer, colormap in zip(self.layers, self.colormaps):
+            self.m.add_child(BindColormap(layer, colormap))
+
+        export_filename = f'{self.path_field_day.split("/")[1]}.geojson'
+        Draw(export=True, filename=export_filename).add_to(self.m)
+        MeasureControl(position='bottomleft', collapsed=False).add_to(self.m)
+        folium.map.LayerControl(collapsed=False).add_to(self.m)
+
+        self.m.save(self.path_to_map)
+
+    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------       
     def _draw_grid(self, grid_size_m):
         ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
@@ -285,6 +319,7 @@ class WheatDetectionSystem():
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
+        
     def _read_logs(self, df, i):
         coords = []
         l = df.iloc[i].values[1]
@@ -525,7 +560,32 @@ def make_dirs(path_folder):
     # индексы вегетации
     try_to_make_dir(f'{path_folder}/veg')
 
+''' 
+def rotate_image(image, angle):
+    image_center = tuple(np.array(image.shape[1::-1]) / 2)
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+    return result
+'''
 
+def rotate_image(image, angleInDegrees):
+    h, w = image.shape[:2]
+    img_c = (w / 2, h / 2)
+
+    rot = cv2.getRotationMatrix2D(img_c, angleInDegrees, 1)
+
+    rad = radians(angleInDegrees)
+    sin_a = sin(rad)
+    cos_a = cos(rad)
+    b_w = int((h * abs(sin_a)) + (w * abs(cos_a)))
+    b_h = int((h * abs(cos_a)) + (w * abs(sin_a)))
+
+    rot[0, 2] += ((b_w / 2) - img_c[0])
+    rot[1, 2] += ((b_h / 2) - img_c[1])
+
+    result = cv2.warpAffine(image, rot, (b_w, b_h), flags=cv2.INTER_LINEAR)
+    return result
+    
 # преобразуем градусы, минуты и секунды в вешественную переменную координаты
 @njit
 def convert_to_decimal(degree, min, sec):
@@ -635,7 +695,7 @@ def find_intersections(image_borders):
 # 2. проверяем корректность протокола
 # 3. рассчитываем координаты области под дроном
 # 4. сохраняем всё в 1 файл и возвращаем его
-def handle_metadata(filenames, path_field_day):
+def handle_metadata(filenames, path_field_day, path_log_metadata):
     # формат полученного датафрейма
     # name           is_ok   W    H     lat     long    height   yaw   pitch    roll     border
     # Image_23.jpg   True    5    3    12.34    12.34    2.7     120    -90     0.0   [[], [], [], []]
@@ -709,7 +769,7 @@ def handle_metadata(filenames, path_field_day):
             }, ignore_index=True)
        
         df_metadata = df_metadata.sort_values(by=['name'])
-        df_metadata.to_csv(f'{path_field_day}/log/metadata.csv', index=False)
+        df_metadata.to_csv(path_log_metadata, index=False)
 
     except:
         print('Ошибка при формировании датафрейма')
