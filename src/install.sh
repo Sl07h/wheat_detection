@@ -3,11 +3,11 @@ wget https://github.com/exiftool/exiftool/archive/refs/tags/12.34.zip
 7z x 12.34.zip
 rm 12.34.zip
 
-# 2. create virtual enviroment
-python -m venv wd_venv
+# 2. create virtual enviroment for wheat detection system libraries
+python3 -m venv wds_venv
 
 # 3. activate virtual enviroment
-. wd_venv/bin/activate
+. wds_venv/bin/activate
 
 # 4. install python libraries
 pip install -r requirements.txt

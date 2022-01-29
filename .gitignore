@@ -1,4 +1,6 @@
-data
+data/*
+!data/test_set1/src/*
+!data/test_set1/*geojson
 exiftool*
 maps
 weights
