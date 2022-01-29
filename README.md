@@ -24,7 +24,7 @@
  ┗ 📜markup.html
 📦src
  ┣ 📜clean.py
- ┣ 📜install
+ ┣ 📜install.sh
  ┣ 📜main.py
  ┣ 📜plot.py
  ┗ 📜wds.py
@@ -45,7 +45,9 @@
 ### Установка
 
 ```
-. src/install
+git clone https://github.com/Sl07h/wheat_detection/
+cd wheat_detection
+. src/install.sh
 ```
 
 ### Запуск
