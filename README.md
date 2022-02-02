@@ -6,17 +6,24 @@
 
 
 
-## Установка и запуск
+## Установка
 
-### Установка на ubuntu
+На Linux
 
-Сохраните файл [src/deploy_wds_on_ubuntu_20.04.sh](src/deploy_wds_on_ubuntu_20.04.sh) и запустите командой 
-
+Сохраните файл [src/deploy_wds_on_ubuntu_20.04.sh](src/deploy_wds_on_ubuntu_20.04.sh) и запустите команду
 
 ``` sh src/deploy_wds_on_ubuntu_20.04.sh```
 
 
-### Запуск
+На Windows
+
+Сохраните файл [src/deploy_wds_on_windows_10.ps1](src/deploy_wds_on_windows_10.ps1) и запустите в powershell от имени администратора команду 
+
+```./src/deploy_wds_on_windows_10.ps1```
+
+
+
+## Запуск
 
 Для того, чтобы получить результат по отдельным делянкам, нужно:
 

@@ -3,7 +3,6 @@ import json
 import cv2
 import gc
 import os
-import sys
 import numpy as np
 import pandas as pd
 from folium.plugins import Draw, MeasureControl
@@ -54,6 +53,7 @@ class WheatDetectionSystem():
         make_dirs(self.path_field_day)        
 
     def read_metadata(self):
+        print('qwe')
         if not os.path.exists(self.path_log_metadata):
             handle_metadata(self.filenames, self.path_field_day, self.path_log_metadata)
 
@@ -705,16 +705,12 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
     tmp_file_count = len(os.listdir(f'{path_field_day}/tmp'))
     print(src_file_count, tmp_file_count)
 
-    exiftool_script_name = 'exiftool'
-    if sys.platform == 'win32':
-        exiftool_script_name = 'windows_exiftool'
-
     if src_file_count != tmp_file_count:
         try:
             for filename in filenames:
                 path_img = f'{path_field_day}/src/{filename}'
                 path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
-                command = f'exiftool-12.34/{exiftool_script_name} -csv {path_img} > {path_csv}'
+                command = f'exiftool-12.34/exiftool -csv {path_img} > {path_csv}'
                 os.system(command)
                 df = pd.read_csv(path_csv, header=None).T
                 df.to_csv(path_csv, header=False, index=False)
