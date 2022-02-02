@@ -17,9 +17,13 @@
 
 На Windows
 
-Сохраните файл [src/deploy_wds_on_windows_10.ps1](src/deploy_wds_on_windows_10.ps1) и запустите в powershell от имени администратора команду 
+Сохраните файл [src/deploy_wds_on_windows_10.ps1](src/deploy_wds_on_windows_10.ps1) и запустите команду
 
 ```./src/deploy_wds_on_windows_10.ps1```
+
+Если у вас заблокировано выполнение скриптов, выполните в powershell от имени администратора
+
+``` Set-ExecutionPolicy unrestricted ```
 
 
 
