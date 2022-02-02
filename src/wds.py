@@ -53,7 +53,6 @@ class WheatDetectionSystem():
         make_dirs(self.path_field_day)        
 
     def read_metadata(self):
-        print('qwe')
         if not os.path.exists(self.path_log_metadata):
             handle_metadata(self.filenames, self.path_field_day, self.path_log_metadata)
 
@@ -710,7 +709,7 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
             for filename in filenames:
                 path_img = f'{path_field_day}/src/{filename}'
                 path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
-                command = f'exiftool-12.34/exiftool -csv {path_img} > {path_csv}'
+                command = f'exiftool-12.34\exiftool -csv {path_img} > {path_csv}'
                 os.system(command)
                 df = pd.read_csv(path_csv, header=None).T
                 df.to_csv(path_csv, header=False, index=False)
