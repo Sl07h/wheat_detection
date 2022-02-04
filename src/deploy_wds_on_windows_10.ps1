@@ -19,6 +19,7 @@ Function DownloadFromGoogleDrive ([String]$URL)
 # 1. 7zip
 Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2107-x64.exe" -OutFile "7z2107-x64.exe"
 Start-Process -FilePath 7z2107-x64.exe -Args "/S" -Verb RunAs -Wait
+$env:Path += ";C:\Program Files\7-Zip"
 rm 7z2107-x64.exe
 
 # 2. Сама система
@@ -34,26 +35,26 @@ Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.8.10/python-3.8.10-a
 ./python-3.8.10-amd64.exe /quiet PrependPath=1 InstallAllUsers=0 InstallLauncherAllUsers=0 Include_launcher=0 Include_doc=0 Include_tcltk=0 Include_test=0  | Out-Null
 rm python-3.8.10-amd64.exe
 # refresh path to see python from current shell
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User") 
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";C:\Program Files\7-Zip;" + [System.Environment]::GetEnvironmentVariable("Path","User") 
 
 # 4.exiftool
 Invoke-WebRequest -Uri "https://exiftool.org/exiftool-12.34.zip" -OutFile "exiftool-12.34.zip"
 7z x exiftool-12.34.zip
 mkdir exiftool-12.34
 mv "exiftool(-k).exe" "exiftool-12.34/exiftool.exe"
-rm "exiftool-12.34.zip"
+rm exiftool-12.34.zip
 
-# 5. create virtual environment for wheat detection system libraries
+# 5. создаём виртуальную переменную
 python -m venv wds_venv
 
-# 6. activate virtual environment
+# 6. активируем её
 wds_venv/Scripts/Activate.ps1
 
-# 7. install python libraries
+# 7. ставим библиотеки питона
 pip install -r requirements.txt
 
 
-# 8. download model weights
+# 8. качаем веса нейросетей
 mkdir weights
 cd weights
 # 8.1 frcnn
