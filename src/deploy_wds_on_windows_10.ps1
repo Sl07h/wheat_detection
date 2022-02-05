@@ -31,9 +31,9 @@ $env:Path += ";" + $env:LOCALAPPDATA + "\Programs\Python\Python38"
 
 # 2. 7zip
 Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2107-x64.exe" -OutFile "7z2107-x64.exe"
-./7z2107-x64.exe /S
-$env:Path += ";C:\Program Files\7-Zip"
+Start-Process -FilePath 7z2107-x64.exe -Args "/S" -Verb RunAs -Wait
 rm 7z2107-x64.exe
+$env:Path += ";C:\Program Files\7-Zip"
 
 # 3. Сама система
 Invoke-WebRequest -Uri "https://github.com/Sl07h/wheat_detection/archive/refs/heads/master.zip" -OutFile "master.zip"
@@ -59,7 +59,7 @@ wds_venv/Scripts/Activate.ps1
 Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "vs_buildtools.exe"
 $proc = Start-Process `
     -FilePath vs_buildtools.exe `
-    -ArgumentList "--quiet",  "--wait", "--add", "Microsoft.VisualStudio.Workload.VCTools" `
+    -ArgumentList "--quiet",  "--wait", "--add", "--add", "Microsoft.VisualStudio.Workload.VCTools", "--add", "Microsoft.VisualStudio.ComponentGroup.VC.Tools.142.x86.x64", "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041" `
     -Wait -PassThru
 $returnCode = $proc.ExitCode
 pip install -r requirements.txt
