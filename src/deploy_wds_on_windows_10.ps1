@@ -55,14 +55,14 @@ python -m venv wds_venv
 # 6. активируем её
 wds_venv/Scripts/Activate.ps1
 
-# 7. ставим библиотеки питона и MS build tools 2017, т.к. без них не работет pycocotools
-Invoke-WebRequest -Uri "https://aka.ms/vs/15/release/vs_buildtools.exe" -OutFile "vs_buildtools_2017.exe"
-$proc = Start-Process   -FilePath vs_buildtools_2017.exe `
-                        -ArgumentList "--quiet",  "--norestart", "--wait", "--add", "Microsoft.VisualStudio.Workload.VCTools", "--add", "Microsoft.VisualStudio.Component.Windows10SDK.17763" `
-                        -Wait -PassThru
-$returnCode = $proc.ExitCode
+# 7. ставим библиотеки питона
+Invoke-WebRequest -Uri "https://drive.google.com/uc?export=download&id=1K9e_K0wlHYYqY5cy3Zxx4_hMB2lR6qlZ" -OutFile "pycocotools-2.0.4-cp38-cp38-win_amd64.zip"
+$env:Path += ";C:\Program Files\7-Zip"
+7z x pycocotools-2.0.4-cp38-cp38-win_amd64.zip
+pip install pycocotools-2.0.4-cp38-cp38-win_amd64.whl
+rm pycocotools-2.0.4-cp38-cp38-win_amd64.zip
+rm pycocotools-2.0.4-cp38-cp38-win_amd64.whl
 pip install -r requirements.txt
-rm vs_buildtools_2017.exe
 
 
 # 8. качаем веса нейросетей
