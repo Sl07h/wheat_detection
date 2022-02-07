@@ -73,3 +73,8 @@ DownloadFromGoogleDrive("https://drive.google.com/uc?id=1nCK-yJ-Y8jTg-hENr31HXNM
 # 8.2 effdet
 DownloadFromGoogleDrive("https://drive.google.com/uc?id=1--0eoJ-SEr0bohgo0E7LOj0gJr9vcNnA&export=download")
 cd ../
+
+# 9. Загрузка данных
+Invoke-WebRequest -Uri "https://drive.google.com/uc?export=download&id=18KD97J_GbJ2xBMs6jAIfJS-xBk2tyr7N" -OutFile "data.zip"
+7z x data.zip
+rm data.zip
