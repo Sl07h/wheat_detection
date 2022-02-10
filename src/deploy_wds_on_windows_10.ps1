@@ -1,5 +1,3 @@
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
 Function DownloadFromGoogleDrive ([String]$URL)
 {
     Invoke-WebRequest -Uri $URL -OutFile qwe.txt -SessionVariable googleDriveSession
@@ -15,6 +13,9 @@ Function DownloadFromGoogleDrive ([String]$URL)
     rm arch.zip
     rm qwe.txt
 }
+
+# 0. подключим протокол передачи
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # 1.python и pip
 Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.8.10/python-3.8.10-amd64.exe" -OutFile "python-3.8.10-amd64.exe"
