@@ -12,18 +12,24 @@
 
 Сохраните файл [src/deploy_wds_on_ubuntu_20.04.sh](src/deploy_wds_on_ubuntu_20.04.sh) и запустите команду
 
-``` sh src/deploy_wds_on_ubuntu_20.04.sh```
+```
+sh src/deploy_wds_on_ubuntu_20.04.sh
+```
 
 
 На Windows
 
 Сохраните файл [src/deploy_wds_on_windows_10.ps1](src/deploy_wds_on_windows_10.ps1) и запустите команду
 
-```./src/deploy_wds_on_windows_10.ps1```
+```
+./src/deploy_wds_on_windows_10.ps1
+```
 
 Если у вас заблокировано выполнение скриптов, выполните в powershell от имени администратора
 
-``` Set-ExecutionPolicy unrestricted ```
+```
+Set-ExecutionPolicy unrestricted
+```
 
 
 
