@@ -10,14 +10,20 @@
 
 На Linux
 
+<details><summary> <b>Раскрыть:</b> </summary>
+
 Сохраните файл [src/deploy_wds_on_ubuntu_20.04.sh](src/deploy_wds_on_ubuntu_20.04.sh) и запустите команду
 
 ```
 sh src/deploy_wds_on_ubuntu_20.04.sh
 ```
 
+</details>
+
 
 На Windows
+
+<details><summary> <b>Раскрыть:</b> </summary>
 
 Сохраните файл [src/deploy_wds_on_windows_10.ps1](src/deploy_wds_on_windows_10.ps1) и запустите команду
 
@@ -30,6 +36,12 @@ sh src/deploy_wds_on_ubuntu_20.04.sh
 ```
 Set-ExecutionPolicy unrestricted
 ```
+
+Если вы не запускали Internet Explorer, то настройте его:
+![](docs/ie11_first_run.png)
+
+
+</details>
 
 
 
