@@ -709,7 +709,7 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
             for filename in filenames:
                 path_img = f'{path_field_day}/src/{filename}'
                 path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
-                command = f'exiftool-12.34\exiftool -csv {path_img} > {path_csv}'
+                command = os.path.join('exiftool-12.34', f'exiftool -csv {path_img} > {path_csv}')
                 os.system(command)
                 df = pd.read_csv(path_csv, header=None).T
                 df.to_csv(path_csv, header=False, index=False)
