@@ -10,7 +10,7 @@ DownloadFromGoogleDrive () {
     echo $DownloadURL
     wget --load-cookies /tmp/cookies.txt $DownloadURL -O arch.zip 
     7z x arch.zip;
-    rm qwe.zip
+    rm arch.zip
 }
 
 # 0. подключим обновим адреса, откуда качать пакеты
