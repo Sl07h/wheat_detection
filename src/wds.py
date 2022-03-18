@@ -1,4 +1,6 @@
+from fileinput import filename
 import folium
+import glob
 import json
 import cv2
 import gc
@@ -45,7 +47,11 @@ class WheatDetectionSystem():
         self.kernel_size = int(kernel_size)
         self.do_show_uncorrect = do_show_uncorrect
         self.activation_treshold = activation_treshold
-        self.filenames = os.listdir(f'{self.path_field_day}/src')
+        self.max_image_size = 400
+        self.filenames = []
+        for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
+            files = glob.glob(f'{self.path_field_day}/src/*.{datatype}')
+            self.filenames += sorted(map(os.path.basename, files))
         self.wheat_ears = []
         self.layers = []
         self.colormaps = []
@@ -94,7 +100,7 @@ class WheatDetectionSystem():
     def draw_wheat_plots(self):
         ''' отрисовка числа колосьев на каждой делянке '''
         feature_group_choropleth = folium.FeatureGroup(
-            name='делянки', show=True)
+            name='wheat plots', show=True)
         df = pd.DataFrame(columns=['сорт', 'количество колосьев'])
         with open(self.path_to_geojson) as f:
             data = json.load(f)
@@ -133,8 +139,7 @@ class WheatDetectionSystem():
 
         colormap = folium.LinearColormap(
             ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'количество колосьев на делянках, шт'
-
+        colormap.caption = 'count of spikes in wheat plots, pcs'
         self.layers.append(feature_group_choropleth)
         self.colormaps.append(colormap)
         df.to_csv(self.path_log_plots)
@@ -142,18 +147,25 @@ class WheatDetectionSystem():
     def draw_protocol(self):
         ''' отображаем корректность протокола сьёмки изображений '''
         feature_group_protocol = folium.FeatureGroup(
-            name='протокол', show=False)
+            name='protocol', show=False)
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
             filename = line['name']
             height = line['height']
-            yaw = line['gimbal_yaw']
-            pitch = line['gimbal_pitch']
-            roll = line['gimbal_roll']
+            gimbal_yaw   = line['gimbal_yaw']
+            gimbal_pitch = line['gimbal_pitch']
+            gimbal_roll  = line['gimbal_roll']
+            flight_yaw   = line['flight_yaw']
+            flight_pitch = line['flight_pitch']
+            flight_roll  = line['flight_roll']
             border = line['border']
             _, color_polyline, popup_str = check_protocol_correctness(
-                filename, yaw, pitch, roll, height)
-            iframe = folium.IFrame(html=popup_str, width=250, height=180)
+                filename, 
+                gimbal_yaw, gimbal_pitch, gimbal_roll,
+                flight_yaw, flight_pitch, flight_roll,
+                height
+            )
+            iframe = folium.IFrame(html=popup_str, width=250, height=200)
             folium.PolyLine(border, color=color_polyline) \
                   .add_child(folium.Popup(iframe)) \
                   .add_to(feature_group_protocol)
@@ -164,8 +176,7 @@ class WheatDetectionSystem():
             self._draw_grid(size)
 
     def draw_images_on_map(self, do_rewrite=False):
-        max_image_size = 400
-        feature_group_mod = folium.FeatureGroup(name='rotate_by_gimbal_yawº')
+        feature_group_mod = folium.FeatureGroup(name='images')
         for i in range(len(self.filenames)):
             data = self.df_metadata.loc[i]
             filename = data['name']
@@ -174,13 +185,13 @@ class WheatDetectionSystem():
             yaw = data['gimbal_yaw']
             border = data['border']
 
-            path_img_src = r'{}/src/{}'.format(self.path_field_day, filename)
-            path_img_mod = r'{}/mod/{}.png'.format(self.path_field_day, filename[:-4])
-
+            path_img_src = f'{self.path_field_day}/src/{filename}'
+            path_img_mod = f'{self.path_field_day}/mod/{filename[:-4]}.png'
+            
             if not os.path.exists(path_img_mod) or do_rewrite and is_OK:
                 image = cv2.imread(path_img_src)
                 h, w, _ = image.shape
-                image_src = cv2.resize(image, (max_image_size, int(float(max_image_size*h)/w)))
+                image_src = cv2.resize(image, (self.max_image_size, int(float(self.max_image_size*h)/w)))
                 image = rotate_image(image_src, -yaw)
                 trans_mask = image[:,:,2] == 0
                 new_image = cv2.cvtColor(image, cv2.COLOR_RGB2RGBA)
@@ -237,7 +248,7 @@ class WheatDetectionSystem():
     def _draw_grid(self, grid_size_m):
         ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'сетка {grid_size_m:.1f}x{grid_size_m:.1f}м²',
+            name=f'grid {grid_size_m:.1f}x{grid_size_m:.1f}м²',
             # overlay=False,
             show=False
         )
@@ -314,7 +325,7 @@ class WheatDetectionSystem():
 
         colormap = folium.LinearColormap(
             ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'плотность колосьев, шт/м²'
+        colormap.caption = 'spike density, pcs/m²'
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
@@ -543,7 +554,7 @@ def try_to_make_dir(path):
     try:
         os.mkdir(path)
     except:
-        print('Папка {} уже существует'.format(path))
+        print(f'Папка {path} уже существует')
 
 
 # создаём папки maps, weights, mod, log, tmp, veg
@@ -603,16 +614,27 @@ def rotate(p, sin_a, cos_a):
 
 
 # проверяем соблюдение протокола съёмки
-def check_protocol_correctness(filename, yaw, pitch, roll, height):
-    popup_str = 'Изображение: {}<br>рысканье: {}º<br>тангаж: {}º<br>крен: {}<br>высота: {}'.format(
-        filename, yaw, pitch, roll, height)
+def check_protocol_correctness(
+    filename, 
+    gimbal_yaw, gimbal_pitch, gimbal_roll,
+    flight_yaw, flight_pitch, flight_roll,
+    height
+):
+    popup_str = f'<b>filename: {filename}</b><br>' + \
+                f'gimbal_yaw: {gimbal_yaw}º<br>' + \
+                f'gimbal_pitch: {gimbal_pitch}º<br>' + \
+                f'gimbal_roll: {gimbal_roll}º<br>' + \
+                f'flight_yaw: {flight_yaw}º<br>' + \
+                f'flight_pitch: {flight_pitch}º<br>' + \
+                f'flight_roll: {flight_roll}º<br>' + \
+                f'height: {height}'
     color_polyline = '#007800'
     is_OK = True
 
     wrong_parameters = []
-    if abs(-90.0 - pitch) >= 5.0:
+    if abs(-90.0 - gimbal_pitch) >= 3.0:
         wrong_parameters.append('тангаж')
-    if abs(0.0 - roll) >= 3.0:
+    if abs(0.0 - gimbal_roll) >= 3.0:
         wrong_parameters.append('крен')
     if abs(3.0 - height) > 0.2:
         wrong_parameters.append('высота')
@@ -634,10 +656,11 @@ def check_protocol_correctness(filename, yaw, pitch, roll, height):
 # рассчитываем охват земли по ширине и высоте, используя
 # относительную высоту полёта и угол обзора
 @njit
-def calc_image_size(height, fov):
+def calc_image_size(height, fov, width_px, height_px):
     diag = 2.0 * height * tan(radians(fov / 2.0))
-    W = diag * 16.0 / sqrt(337.0)
-    H = diag * 9.0 / sqrt(337.0)
+    diag_px = sqrt(width_px**2 + height_px**2)
+    W = diag * width_px / diag_px
+    H = diag * height_px / diag_px
     return W, H, diag
 
 
@@ -648,9 +671,10 @@ def calc_image_border(
     longtitude,
     height,
     fov,
-    yaw
+    yaw,
+    width_px, height_px
 ):
-    W, H, diag = calc_image_size(height, fov)
+    W, H, diag = calc_image_size(height, fov, width_px, height_px)
     ratio = 31.0 * cos(radians(latitude))
 
     center = np.array([latitude, longtitude], dtype=float)
@@ -714,8 +738,10 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
                 df = pd.read_csv(path_csv, header=None).T
                 df.to_csv(path_csv, header=False, index=False)
         except:
-            print('Ошибка. Число файлов в src и tmp не совпало')
-
+            print('[-] число файлов в src и tmp не совпало')
+    else:
+        print('[+] число файлов совпало')
+            
     try:
         df_metadata = pd.DataFrame(columns=[
             'name',
@@ -727,6 +753,9 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
             'flight_yaw', 'flight_pitch', 'flight_roll',
             'border',
         ])
+        
+
+        
         for filename in filenames:
             path_img = f'{path_field_day}/src/{filename}'
             path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
@@ -735,17 +764,23 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
                 latitude = convert_to_decimal(*my_image.gps_latitude)
                 longtitude = convert_to_decimal(*my_image.gps_longitude)
             df = pd.read_csv(path_csv, index_col=0).T
-            gimbal_pitch = float(df['GimbalPitchDegree'][0])
+            width_px     = float(df['ExifImageWidth'][0])
+            height_px    = float(df['ExifImageHeight'][0])
             gimbal_yaw   = float(df['GimbalYawDegree'][0])
+            gimbal_pitch = float(df['GimbalPitchDegree'][0])
             gimbal_roll  = float(df['GimbalRollDegree'][0])
-            flight_pitch = float(df['FlightPitchDegree'][0])
             flight_yaw   = float(df['FlightYawDegree'][0])
+            flight_pitch = float(df['FlightPitchDegree'][0])
             flight_roll  = float(df['FlightRollDegree'][0])
             height       = float(df['RelativeAltitude'][0])
             fov          = float(df['FOV'][0].split()[0])
-
-            is_OK, _, _ = check_protocol_correctness(filename, gimbal_yaw, gimbal_pitch, gimbal_roll, height)
-            W, H, _, border = calc_image_border(latitude, longtitude, height, fov, gimbal_yaw)
+            is_OK, _, _ = check_protocol_correctness(
+                filename, 
+                gimbal_yaw, gimbal_pitch, gimbal_roll,
+                flight_yaw, flight_pitch, flight_roll,
+                height
+            )
+            W, H, _, border = calc_image_border(latitude, longtitude, height, fov, gimbal_yaw, width_px, height_px)
             df_metadata = df_metadata.append({
                 'name':          filename,
                 'is_OK':         str(is_OK),
@@ -760,14 +795,14 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
                 'flight_yaw':    flight_yaw,
                 'flight_pitch':  flight_pitch,
                 'flight_roll':   flight_roll,
-                'border': border
+                'border':        border
             }, ignore_index=True)
        
         df_metadata = df_metadata.sort_values(by=['name'])
         df_metadata.to_csv(path_log_metadata, index=False)
 
     except:
-        print('Ошибка при формировании датафрейма')
+        print('[-] датафрейм не сформирован')
 
 
 # https://discuss.pytorch.org/t/how-to-load-images-from-different-folders-in-the-same-batch/18942
