@@ -53,6 +53,7 @@ class WheatDetectionSystem():
             files = glob.glob(f'{self.path_field_day}/src/*.{datatype}')
             self.filenames += sorted(map(os.path.basename, files))
         self.wheat_ears = []
+        self.vegetation = []
         self.layers = []
         self.colormaps = []
         # сокрытые от пользователя операции
@@ -91,10 +92,19 @@ class WheatDetectionSystem():
         self.adjacent_frames = find_intersections(self.image_borders)
         print('Нашёл пересечение кадров')
         n = len(self.filenames)
-        for i in range(n):
-            print(f'{i} / {n}')
-            self.wheat_ears += self._calc_wheat_intersections(i)
-        self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
+        if os.path.exists(self.path_log_bboxes):
+            for i in range(n):
+                print(f'{i} / {n}')
+                coords_and_p = self._read_coords_and_p(i)
+                self.wheat_ears += self._calc_wheat_intersections(i, coords_and_p)
+            self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
+
+        if os.path.isdir(f'{self.path_field_day}/masks'):
+            for i in range(n):
+                print(f'{i} / {n}')
+                coords_and_p = self._read_image_green_pixels(i)
+                self.vegetation += self._calc_wheat_intersections(i, coords_and_p)
+
 
 
     def draw_wheat_plots(self):
@@ -173,9 +183,23 @@ class WheatDetectionSystem():
 
     def draw_grids(self, size_list):
         for size in size_list:
-            self._draw_grid(size)
+            self._draw_grid(
+                self.wheat_ears,
+                size,
+                'grid',
+                'spike density, pcs/m²'
+            )
 
-    def draw_images_on_map(self, do_rewrite=False):
+    def draw_vegetation(self, size_list):
+        for size in size_list:
+            self._draw_grid(
+                self.vegetation,
+                size,
+                'vegetation grid',
+                'share of green land, %'
+            )
+
+    def draw_images_on_map(self, do_rewrite=True):
         feature_group_mod = folium.FeatureGroup(name='images')
         for i in range(len(self.filenames)):
             data = self.df_metadata.loc[i]
@@ -185,7 +209,7 @@ class WheatDetectionSystem():
             yaw = data['gimbal_yaw']
             border = data['border']
 
-            path_img_src = f'{self.path_field_day}/src/{filename}'
+            path_img_src = f'{self.path_field_day}/masks/model_2_mask_{filename[:-4]}.png'
             path_img_mod = f'{self.path_field_day}/mod/{filename[:-4]}.png'
             
             if not os.path.exists(path_img_mod) or do_rewrite and is_OK:
@@ -200,7 +224,7 @@ class WheatDetectionSystem():
 
             ar = np.array(border).T
             bounds = [[np.min(ar[0]), np.min(ar[1])], [np.max(ar[0]), np.max(ar[1])]]
-            if is_OK:
+            if is_OK or self.do_show_uncorrect:
                 img = folium.raster_layers.ImageOverlay(
                     name="Инструмент для разметки делянок",
                     image=path_img_mod,
@@ -245,10 +269,16 @@ class WheatDetectionSystem():
     # ---------------------------------------------------------------------------
     # ---------------------------------------------------------------------------
     # ---------------------------------------------------------------------------       
-    def _draw_grid(self, grid_size_m):
+    def _draw_grid(
+        self,
+        coords_and_p,
+        grid_size_m,
+        str_menu='grid', 
+        str_colormap_caption='spike density, pcs/m²'
+    ):
         ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'grid {grid_size_m:.1f}x{grid_size_m:.1f}м²',
+            name=f'{str_menu} {grid_size_m:.1f}x{grid_size_m:.1f}м²',
             # overlay=False,
             show=False
         )
@@ -263,7 +293,7 @@ class WheatDetectionSystem():
 
         wheat_counts = np.zeros((n_lat+1, n_long+1))
         coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
-        for wheat_ear in self.wheat_ears:
+        for wheat_ear in coords_and_p:
             _lat, _long, p = wheat_ear
             i = int((_lat - self.lat_min) / d_lat)
             j = int((_long - self.long_min) / d_long)
@@ -325,17 +355,37 @@ class WheatDetectionSystem():
 
         colormap = folium.LinearColormap(
             ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'spike density, pcs/m²'
+        colormap.caption = str_colormap_caption
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
-        
-    def _read_logs(self, df, i):
-        coords = []
-        l = df.iloc[i].values[1]
+    def _read_image_green_pixels(self, i):
+        ''' Возвращает список зелёных пикселей с весом [x, y, p] '''
+        path_mask = f'{self.path_field_day}/masks/model_2_mask_{self.filenames[i][:-3]}png'
+        mask = cv2.imread(path_mask, 0)
+        positions = np.argwhere(mask == 255)
+        positions[:,[0, 1]] = positions[:,[1, 0]]
+        positions_and_p = np.ones((positions.shape[0], 3), dtype=np.float64)
+        positions_and_p[:,:-1] = positions
+
+        data = self.df_metadata.iloc[i]
+        w_in_meters = float(data['W'])
+        h_in_meters = float(data['H'])
+        square_in_meters = w_in_meters * h_in_meters
+        h, w = mask.shape
+        resolution = h*w
+        ratio = square_in_meters / resolution
+        positions_and_p[:,-1] *= ratio * 100
+        print(positions_and_p.shape, resolution, square_in_meters)
+        return list(positions_and_p)
+
+
+    def _read_coords_and_p(self, i):
+        coords_and_p = []
+        l = self.df_bboxes.iloc[i].values[1]
         try:
             if isnan(l):
-                return coords
+                return coords_and_p
         except:
             pass
         l = l.split(' ')
@@ -344,12 +394,12 @@ class WheatDetectionSystem():
             j = i*5
             p = float(l[j])
             if p > self.activation_treshold:
-                lat = int(float(l[j+1])) + int(float(l[j+3])) // 2
-                lon = int(float(l[j+2])) + int(float(l[j+4])) // 2
-                coords.append([lat, lon, p])
-        return coords
+                lat = int((float(l[j+1]) + float(l[j+3])) / 2)
+                lon = int((float(l[j+2]) + float(l[j+4])) / 2)
+                coords_and_p.append([lat, lon, p])
+        return coords_and_p
 
-    def _calc_wheat_intersections(self, df_i):
+    def _calc_wheat_intersections(self, df_i, coords_and_p):
         ''' поворачиваем колоски по азимуту и нормируем, поподающие в несколько изображений '''
         data = self.df_metadata.loc[df_i]
         is_OK = data['is_OK']
@@ -371,9 +421,8 @@ class WheatDetectionSystem():
         W_pixels /= 2
 
         if is_OK or self.do_show_uncorrect:
-            bboxes = self._read_logs(self.df_bboxes, df_i)
-            for i in range(len(bboxes)):
-                x, y, p = bboxes[i]
+            for i in range(len(coords_and_p)):
+                x, y, p = coords_and_p[i]
                 x = (x - W_pixels) / W_pixels * W
                 y = (1.0 - (y - H_pixels)) / H_pixels * H
                 point = np.array([y, x], dtype=float)
@@ -388,10 +437,10 @@ class WheatDetectionSystem():
                     polygon = Polygon(np.array(self.image_borders[j]))
                     if polygon.contains(point):
                         w += 1.0
-                bboxes[i][0] = y
-                bboxes[i][1] = x
-                bboxes[i][2] = 1.0 / w
-            return bboxes
+                coords_and_p[i][0] = y
+                coords_and_p[i][1] = x
+                coords_and_p[i][2] = p / w
+            return coords_and_p
         else:
             return []
 
