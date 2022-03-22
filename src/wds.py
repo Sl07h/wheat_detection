@@ -1,4 +1,3 @@
-from fileinput import filename
 import folium
 import glob
 import json
@@ -47,7 +46,8 @@ class WheatDetectionSystem():
         self.kernel_size = int(kernel_size)
         self.do_show_uncorrect = do_show_uncorrect
         self.activation_treshold = activation_treshold
-        self.max_image_size = 400
+        self.max_image_size = 150
+        self.max_mask_size = 5472
         self.filenames = []
         for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
             files = glob.glob(f'{self.path_field_day}/src/*.{datatype}')
@@ -147,7 +147,7 @@ class WheatDetectionSystem():
     def draw_protocol(self):
         ''' отображаем корректность протокола сьёмки изображений '''
         feature_group_protocol = folium.FeatureGroup(
-            name='protocol', show=False)
+            name='protocol', show=True)
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
             filename = line['name']
@@ -175,8 +175,9 @@ class WheatDetectionSystem():
         for size in size_list:
             self._draw_grid(size)
 
-    def draw_images_on_map(self, do_rewrite=False):
-        feature_group_mod = folium.FeatureGroup(name='images')
+    def draw_images_on_map(self, do_rewrite=True):
+        feature_group_images = folium.FeatureGroup(name='images', show=False)
+        feature_group_masks = folium.FeatureGroup(name='masks', show=False)
         for i in range(len(self.filenames)):
             data = self.df_metadata.loc[i]
             filename = data['name']
@@ -186,31 +187,39 @@ class WheatDetectionSystem():
             border = data['border']
 
             path_img_src = f'{self.path_field_day}/src/{filename}'
-            path_img_mod = f'{self.path_field_day}/mod/{filename[:-4]}.png'
+            path_img_mod = f'{self.path_field_day}/mod/{filename[:-4]}.webp'
+            path_mask_src = f'{self.path_field_day}/masks/model_2_mask_{filename[:-4]}.png'
+            path_mask_mod = f'{self.path_field_day}/mod/mask_{filename[:-4]}.webp'
             
-            if not os.path.exists(path_img_mod) or do_rewrite and is_OK:
-                image = cv2.imread(path_img_src)
-                h, w, _ = image.shape
-                image_src = cv2.resize(image, (self.max_image_size, int(float(self.max_image_size*h)/w)))
-                image = rotate_image(image_src, -yaw)
-                trans_mask = image[:,:,2] == 0
-                new_image = cv2.cvtColor(image, cv2.COLOR_RGB2RGBA)
-                new_image[trans_mask] = [0,0,0,0]
-                cv2.imwrite(path_img_mod, new_image)
+            self._rotate_and_save(path_img_src, path_img_mod, yaw, self.max_image_size, do_rewrite, is_OK)
+            self._rotate_and_save(path_mask_src, path_mask_mod, yaw, self.max_mask_size, do_rewrite, is_OK)
 
             ar = np.array(border).T
             bounds = [[np.min(ar[0]), np.min(ar[1])], [np.max(ar[0]), np.max(ar[1])]]
-            if is_OK:
-                img = folium.raster_layers.ImageOverlay(
+            if is_OK or self.do_show_uncorrect:
+                folium.raster_layers.ImageOverlay(
                     name="Инструмент для разметки делянок",
                     image=path_img_mod,
                     bounds=bounds,
                     opacity=1.0,
                     control=False,
                     zindex=1,
-                ).add_to(feature_group_mod)
-        feature_group_mod.add_to(self.m)
+                ).add_to(feature_group_images)
+                folium.raster_layers.ImageOverlay(
+                    name="Инструмент для разметки делянок",
+                    image=path_mask_mod,
+                    bounds=bounds,
+                    opacity=1.0,
+                    control=False,
+                    zindex=1,
+                ).add_to(feature_group_masks)
+        feature_group_images.add_to(self.m)
+        feature_group_masks.add_to(self.m)
         
+    def draw_vegetation(self, size_list):
+        for size in size_list:
+            self._draw_vegetation(size)
+
     def create_map(self):
         ''' создаём карту и сохраняем объект карты как об приватное поле  '''
         self.m = folium.Map(
@@ -222,7 +231,7 @@ class WheatDetectionSystem():
         )
         base_map = folium.FeatureGroup(
             name='Basemap', overlay=True, control=False)
-        folium.TileLayer(tiles='OpenStreetMap', max_zoom=23).add_to(base_map)
+        folium.TileLayer(tiles='OpenStreetMap', max_zoom=25).add_to(base_map)
         base_map.add_to(self.m)
 
     def save_map(self):
@@ -248,7 +257,7 @@ class WheatDetectionSystem():
     def _draw_grid(self, grid_size_m):
         ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'grid {grid_size_m:.1f}x{grid_size_m:.1f}м²',
+            name=f'grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
             # overlay=False,
             show=False
         )
@@ -320,7 +329,7 @@ class WheatDetectionSystem():
                                      fill_color=color,
                                      fill_opacity=1.0
                                      )\
-                        .add_child(folium.Popup(str(wheat_counts[i][j]))) \
+                        .add_child(folium.Popup(f'{wheat_counts[i][j]:.2f}')) \
                         .add_to(feature_group_grid)
 
         colormap = folium.LinearColormap(
@@ -329,13 +338,136 @@ class WheatDetectionSystem():
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
+    def _draw_vegetation(self, grid_size_m):
+        ''' отрисовываем долю зелёных пикселей на квадратную сетку grid_size_m * grid_size_m '''
+        feature_group_grid = folium.map.FeatureGroup(
+            name=f'vegetation grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            show=False
+        )
+
+        # определяем размер сетки
+        ratio = 31.0 * cos(radians(self.latitude))
+        d_lat = convert_to_decimal(0.0, 0.0, grid_size_m / 31.0)
+        d_long = convert_to_decimal(0.0, 0.0, grid_size_m / ratio)
+        delta_lat = self.lat_max - self.lat_min
+        delta_long = self.long_max - self.long_min
+        n_lat = int(delta_lat / d_lat)
+        n_long = int(delta_long / d_long)
+
+        grid = np.zeros((n_lat+1, n_long+1))
+        grid_count = np.zeros((n_lat+1, n_long+1))
+        coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
         
-    def _read_logs(self, df, i):
-        coords = []
+        for index, filename in enumerate(self.filenames):
+            # определяем в какие квадраты попадает изображение
+            path_mask = f'{self.path_field_day}/mod/mask_{filename[:-4]}.webp'
+            img = cv2.imread(path_mask, 0)
+            img = img[::-1] # чтобы координатные оси совпадали
+            h, w = img.shape
+            tmp = np.array(self.image_borders[index]).T
+            img_lat_min = tmp[0].min()
+            img_lat_max = tmp[0].max()
+            img_long_min = tmp[1].min()
+            img_long_max = tmp[1].max()
+            img_delta_lat = img_lat_max - img_lat_min
+            img_delta_long = img_long_max - img_long_min
+            i_min = int((img_lat_min - self.lat_min) / d_lat)
+            j_min = int((img_long_min - self.long_min) / d_long)
+            i_max = int((img_lat_max - self.lat_min) / d_lat) + 1
+            j_max = int((img_long_max - self.long_min) / d_long) + 1
+
+            print(filename, i_min, i_max, n_lat, ' \t', j_min, j_max, n_long)
+            for i in range(i_min, i_max):
+                for j in range(j_min, j_max):
+                    # определяем координаты квадрата
+                    lat_b = self.lat_min + i*d_lat
+                    lat_e = lat_b + d_lat
+                    long_b = self.long_min + j*d_long
+                    long_e = long_b + d_long
+                    # переводим их в положение пикселей
+                    y_b = int(h * (lat_b - img_lat_min) / img_delta_lat)
+                    y_e = int(h * (lat_e - img_lat_min) / img_delta_lat)
+                    x_b = int(w * (long_b - img_long_min) / img_delta_long)
+                    x_e = int(w * (long_e - img_long_min) / img_delta_long)
+                    # выделяем кусок изображения
+                    y_b = max(0, y_b)
+                    y_e = min(h, y_e)
+                    x_b = max(0, x_b)
+                    x_e = min(w, x_e)
+                    img_region = img[y_b:y_e, x_b:x_e]
+                    # считаем число зелёных (255) и остальных пикселей (0)
+                    green = np.argwhere(img_region == 255).shape[0]
+                    total = (y_e - y_b) * (x_e - x_b)
+                    # print(f'{i} {j}\t{y_b}:{y_e},   \t{x_b}:{x_e}   \t{img.shape}\t{green}, {total}')
+                    # if green > 0:
+                    #     print(green / total, '\t', green, total)
+                    grid[i][j] += green / total
+                    grid_count[i][j] += 1.0
+
+        # grid/=grid_count
+        for i, j in np.argwhere(grid_count > 1.0):
+            grid[i][j] /= grid_count[i][j]
+        grid*=100
+
+        max_p = np.amax(grid)
+        print(max_p)
+
+        # divide count of objects by region area
+        for i in range(n_lat):
+            for j in range(n_long):
+                if grid[i][j] > 0:
+                    lat_b = self.lat_min + i*d_lat
+                    lat_e = lat_b + d_lat
+                    long_b = self.long_min + j*d_long
+                    long_e = long_b + d_long
+                    coordinates[i][j] = np.array([
+                        [lat_b, long_b],
+                        [lat_b, long_e],
+                        [lat_e, long_e],
+                        [lat_e, long_b]
+                    ])
+
+                    # max_p:  val = 1  ->  (0,255,0)
+                    # min_p:  val = 0  ->  (221,221,221)
+                    val = grid[i][j] / max_p
+                    hex_val = hex(int((1 - val) * 221))[2:]
+                    if len(hex_val) == 1:
+                        hex_val = '0'+hex_val
+                    color = f'#{hex_val}dd{hex_val}'
+
+                    folium.Rectangle(coordinates[i][j],
+                                     color='#303030',
+                                     opacity=0.05,
+                                     fill=True,
+                                     fill_color=color,
+                                     fill_opacity=1.0
+                                     )\
+                        .add_child(folium.Popup(f'{grid[i][j]:.2f}')) \
+                        .add_to(feature_group_grid)
+
+        colormap = folium.LinearColormap(
+            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
+        colormap.caption = 'share of green land, %'
+        self.layers.append(feature_group_grid)
+        self.colormaps.append(colormap)
+    
+    def _rotate_and_save(self, path_src, path_mod, yaw, max_image_size, do_rewrite, is_OK):
+        if not os.path.exists(path_mod) or do_rewrite and (is_OK or self.do_show_uncorrect):
+            image = cv2.imread(path_src)
+            h, w, _ = image.shape
+            image_src = cv2.resize(image, (max_image_size, int(float(max_image_size*h)/w)))
+            image = rotate_image(image_src, -yaw)
+            trans_mask = image[:,:,2] == 0
+            new_image = cv2.cvtColor(image, cv2.COLOR_RGB2RGBA)
+            new_image[trans_mask] = [0,0,0,0]
+            cv2.imwrite(path_mod, new_image)
+
+    def _read_coords_and_p(self, df, i):
+        coords_and_p = []
         l = df.iloc[i].values[1]
         try:
             if isnan(l):
-                return coords
+                return coords_and_p
         except:
             pass
         l = l.split(' ')
@@ -346,8 +478,8 @@ class WheatDetectionSystem():
             if p > self.activation_treshold:
                 lat = int(float(l[j+1])) + int(float(l[j+3])) // 2
                 lon = int(float(l[j+2])) + int(float(l[j+4])) // 2
-                coords.append([lat, lon, p])
-        return coords
+                coords_and_p.append([lat, lon, p])
+        return coords_and_p
 
     def _calc_wheat_intersections(self, df_i):
         ''' поворачиваем колоски по азимуту и нормируем, поподающие в несколько изображений '''
@@ -371,9 +503,9 @@ class WheatDetectionSystem():
         W_pixels /= 2
 
         if is_OK or self.do_show_uncorrect:
-            bboxes = self._read_logs(self.df_bboxes, df_i)
-            for i in range(len(bboxes)):
-                x, y, p = bboxes[i]
+            coords_and_p = self._read_coords_and_p(self.df_bboxes, df_i)
+            for i in range(len(coords_and_p)):
+                x, y, p = coords_and_p[i]
                 x = (x - W_pixels) / W_pixels * W
                 y = (1.0 - (y - H_pixels)) / H_pixels * H
                 point = np.array([y, x], dtype=float)
@@ -388,10 +520,10 @@ class WheatDetectionSystem():
                     polygon = Polygon(np.array(self.image_borders[j]))
                     if polygon.contains(point):
                         w += 1.0
-                bboxes[i][0] = y
-                bboxes[i][1] = x
-                bboxes[i][2] = 1.0 / w
-            return bboxes
+                coords_and_p[i][0] = y
+                coords_and_p[i][1] = x
+                coords_and_p[i][2] = 1.0 / w
+            return coords_and_p
         else:
             return []
 
@@ -662,6 +794,30 @@ def calc_image_size(height, fov, width_px, height_px):
     W = diag * width_px / diag_px
     H = diag * height_px / diag_px
     return W, H, diag
+
+LENGTH_OF_1_DEGREE_IN_METERS = 111134.861111111111111111111111111
+
+def convert_lat_to_meters(latitude):
+    ''' Широта. https://v-ipc.ru/guides/coord '''
+    return latitude * LENGTH_OF_1_DEGREE_IN_METERS
+
+
+def convert_meters_to_lat(latitude_m):
+    ''' Широта '''
+    return latitude_m / LENGTH_OF_1_DEGREE_IN_METERS
+
+
+def convert_lon_to_meters(longitude, latitude):
+    ''' Долгота '''
+    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
+    return longitude * ratio
+
+
+def convert_meters_to_lon(longitude_m, latitude):
+    ''' Долгота '''
+    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
+    return longitude_m / ratio
+
 
 
 # рассчёт границы изображения
