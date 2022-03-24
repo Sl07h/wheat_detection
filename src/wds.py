@@ -36,10 +36,10 @@ class WheatDetectionSystem():
         activation_treshold: int = 0.7,  # 0.7
     ):
         self.path_field_day    = f'data/{field}/{attempt}'
-        prefix_string = f'data/{field}/{attempt}/log/{field}.{attempt}.{cnn_model}.{kernel_size}'
-        self.path_log_metadata = f'{prefix_string}.metadata.csv'
-        self.path_log_bboxes   = f'{prefix_string}.bboxes.csv'
-        self.path_log_plots    = f'{prefix_string}.result.csv'
+        self.prefix_string = f'data/{field}/{attempt}/log/{field}.{attempt}.{cnn_model}.{kernel_size}'
+        self.path_log_metadata = f'{self.prefix_string}.metadata.csv'
+        self.path_log_bboxes   = f'{self.prefix_string}.bboxes.csv'
+        self.path_log_plots    = f'{self.prefix_string}.result.csv'
         self.path_to_geojson   = f'data/{field}/{field}.geojson'
         self.path_to_map       = f'maps/{field}.{attempt}.{cnn_model}.{kernel_size}.html'
         self.cnn_model = cnn_model
@@ -376,7 +376,7 @@ class WheatDetectionSystem():
             i_max = int((img_lat_max - self.lat_min) / d_lat) + 1
             j_max = int((img_long_max - self.long_min) / d_long) + 1
 
-            print(filename, i_min, i_max, n_lat, ' \t', j_min, j_max, n_long)
+            print(' '*80+f'\r{index} / {len(self.filenames)} {filename} {i_min} {i_max} {n_lat} \t {j_min} {j_max} {n_long}', end='\r')
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
                     # определяем координаты квадрата
@@ -401,17 +401,25 @@ class WheatDetectionSystem():
                     # print(f'{i} {j}\t{y_b}:{y_e},   \t{x_b}:{x_e}   \t{img.shape}\t{green}, {total}')
                     # if green > 0:
                     #     print(green / total, '\t', green, total)
-                    grid[i][j] += green / total
-                    grid_count[i][j] += 1.0
+                    if total > 0:
+                        grid[i][j] += green / total
+                        grid_count[i][j] += 1.0
 
         # grid/=grid_count
         for i, j in np.argwhere(grid_count > 1.0):
             grid[i][j] /= grid_count[i][j]
         grid*=100
-
         max_p = np.amax(grid)
-        print(max_p)
 
+        f = open(f'{self.prefix_string}.vegetation_grid_{grid_size_m:.2f}.klm', 'w')
+        f.write('''<?xml version="1.0" encoding="utf-8" ?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document id="root_doc">
+<Schema name="canopy_example" id="canopy_example">
+    <SimpleField name="percent" type="float"></SimpleField>
+</Schema>
+<Folder><name>canopy_example</name>
+''')
         # divide count of objects by region area
         for i in range(n_lat):
             for j in range(n_long):
@@ -435,6 +443,7 @@ class WheatDetectionSystem():
                         hex_val = '0'+hex_val
                     color = f'#{hex_val}dd{hex_val}'
 
+                    self._save_grid_element_to_klm(f, coordinates[i][j], grid[i][j], color)
                     folium.Rectangle(coordinates[i][j],
                                      color='#303030',
                                      opacity=0.05,
@@ -444,12 +453,14 @@ class WheatDetectionSystem():
                                      )\
                         .add_child(folium.Popup(f'{grid[i][j]:.2f}')) \
                         .add_to(feature_group_grid)
-
+        f.write('\n</Folder>\n</Document></kml>')
+        f.close()
         colormap = folium.LinearColormap(
             ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
         colormap.caption = 'share of green land, %'
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
+        print(' '*80 + f'\r[+] сетка {grid_size_m:.2f}x{grid_size_m:.2f} м^2, max % зелени: {max_p:.2f}')
     
     def _rotate_and_save(self, path_src, path_mod, yaw, max_image_size, do_rewrite, is_OK):
         if not os.path.exists(path_mod) or do_rewrite and (is_OK or self.do_show_uncorrect):
@@ -557,6 +568,21 @@ class WheatDetectionSystem():
                     if wheat_plot_polygon.contains(point):
                         ears_in_polygons[i] += wheat_ear[2]
         return ears_in_polygons
+
+    def _save_grid_element_to_klm(self, f, coordinates, percent, color):
+        coordinates_str = ''
+        for lat, long in coordinates:
+            coordinates_str += f'{long},{lat} '
+        lat, long = coordinates[0]
+        coordinates_str += f'{long},{lat}'
+        f.write(f'''
+    <Placemark>
+        <Style><LineStyle><color>ff{color[1:]}</color></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>
+        <ExtendedData><SchemaData schemaUrl="#canopy_example">
+            <SimpleData name="percent">{percent}</SimpleData>
+        </SchemaData></ExtendedData>
+            <MultiGeometry><Polygon><outerBoundaryIs><LinearRing><coordinates>{coordinates_str}</coordinates></LinearRing></outerBoundaryIs></Polygon></MultiGeometry>
+    </Placemark>''')
 
     def _detect_wheat_heads(self):
 
