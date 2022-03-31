@@ -1,6 +1,6 @@
 from wds import WheatDetectionSystem
 
-wds = WheatDetectionSystem('seedlings_2019', '06_03', 'frcnn', '400')
+wds = WheatDetectionSystem('seedlings_2019', '06_03_test', 'frcnn', '400')
 wds.read_metadata()
 
 wds.create_map()

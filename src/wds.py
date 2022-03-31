@@ -13,6 +13,7 @@ from jinja2 import Template
 from math import sin, cos, tan, radians, sqrt, isnan
 from numba import njit
 from shapely.geometry import Point, Polygon
+from collections import defaultdict
 import torch
 import torchvision
 from torchvision import transforms
@@ -355,15 +356,35 @@ class WheatDetectionSystem():
         n_long = int(delta_long / d_long)
 
         grid = np.zeros((n_lat+1, n_long+1))
-        grid_count = np.zeros((n_lat+1, n_long+1))
         coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
+
+
+        '''
+        Новый алгоритм рассчёта пересечений:
+        1. считаем границы всей сетки
+        2. для каждого квадрата рассчитать с какими изображениями есть пересечение
+        3. зная список смежных изображений вырезать куски и соединить их через логическое ИЛИ.
+        4. рассчитать индекс
+        '''
+        # запоминаем какие изображения попадают в каждый элемент сетки
+        d = defaultdict(list)
+        d_images_grid = defaultdict(lambda: np.zeros((500, 500), np.uint8))
+        for index in range(len(self.filenames)):
+            tmp = np.array(self.image_borders[index]).T
+            img_lat_min = tmp[0].min()
+            img_lat_max = tmp[0].max()
+            img_long_min = tmp[1].min()
+            img_long_max = tmp[1].max()
+            i_min = int((img_lat_min  - self.lat_min) / d_lat)
+            j_min = int((img_long_min - self.long_min) / d_long)
+            i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
+            j_max = int((img_long_max - self.long_min) / d_long) + 1
+            for i in range(i_min, i_max):
+                for j in range(j_min, j_max):
+                    d[i,j].append(index)
+                    d_images_grid[i,j] = np.zeros((500, 500), np.uint8)
         
-        for index, filename in enumerate(self.filenames):
-            # определяем в какие квадраты попадает изображение
-            path_mask = f'{self.path_field_day}/mod/mask_{filename[:-4]}.webp'
-            img = cv2.imread(path_mask, 0)
-            img = img[::-1] # чтобы координатные оси совпадали
-            h, w = img.shape
+        for index in range(len(self.filenames)):
             tmp = np.array(self.image_borders[index]).T
             img_lat_min = tmp[0].min()
             img_lat_max = tmp[0].max()
@@ -371,12 +392,14 @@ class WheatDetectionSystem():
             img_long_max = tmp[1].max()
             img_delta_lat = img_lat_max - img_lat_min
             img_delta_long = img_long_max - img_long_min
-            i_min = int((img_lat_min - self.lat_min) / d_lat)
+            i_min = int((img_lat_min  - self.lat_min) / d_lat)
             j_min = int((img_long_min - self.long_min) / d_long)
-            i_max = int((img_lat_max - self.lat_min) / d_lat) + 1
+            i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
             j_max = int((img_long_max - self.long_min) / d_long) + 1
-
-            print(' '*80+f'\r{index} / {len(self.filenames)} {filename} {i_min} {i_max} {n_lat} \t {j_min} {j_max} {n_long}', end='\r')
+            path_mask = f'{self.path_field_day}/mod/mask_{self.filenames[index][:-4]}.webp'
+            img = cv2.imread(path_mask, 0)
+            img = img[::-1] # чтобы координатные оси совпадали
+            h, w = img.shape
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
                     # определяем координаты квадрата
@@ -390,24 +413,28 @@ class WheatDetectionSystem():
                     x_b = int(w * (long_b - img_long_min) / img_delta_long)
                     x_e = int(w * (long_e - img_long_min) / img_delta_long)
                     # выделяем кусок изображения
+                    pad_b = max(0, -y_b)        # наращиваем снизу
+                    pad_t = max(0, y_e - h)     # наращиваем сверху
+                    pad_l = max(0, -x_b)        # наращиваем слева
+                    pad_r = max(0, x_e - w)     # наращиваем справа
                     y_b = max(0, y_b)
                     y_e = min(h, y_e)
                     x_b = max(0, x_b)
                     x_e = min(w, x_e)
-                    img_region = img[y_b:y_e, x_b:x_e]
-                    # считаем число зелёных (255) и остальных пикселей (0)
-                    green = np.argwhere(img_region == 255).shape[0]
-                    total = (y_e - y_b) * (x_e - x_b)
-                    # print(f'{i} {j}\t{y_b}:{y_e},   \t{x_b}:{x_e}   \t{img.shape}\t{green}, {total}')
-                    # if green > 0:
-                    #     print(green / total, '\t', green, total)
-                    if total > 0:
-                        grid[i][j] += green / total
-                        grid_count[i][j] += 1.0
+                    img_region = np.zeros((y_e - y_b + pad_b + pad_t, x_e - x_b + pad_l + pad_r), np.uint8)
+                    img_region[pad_b:pad_b + y_e - y_b, pad_l:pad_l + x_e - x_b] = img[y_b:y_e, x_b:x_e]
+                    # print(i,j,index, img_region.shape)
+                    # растягиваем его до размера 500x500 и смотрим пересечение вместе с другими изображениями
+                    img_region = cv2.resize(img_region, (500, 500))
+                    d_images_grid[i,j] = cv2.bitwise_or(d_images_grid[i,j], img_region)
 
-        # grid/=grid_count
-        for i, j in np.argwhere(grid_count > 1.0):
-            grid[i][j] /= grid_count[i][j]
+        for i,j in d.keys():
+            # считаем число зелёных (255) и остальных пикселей (0)
+            h, w = d_images_grid[i,j].shape
+            green = np.argwhere(d_images_grid[i,j] == 255).shape[0]
+            total = h * w
+            grid[i][j] += green / total
+
         grid*=100
         max_p = np.amax(grid)
 
