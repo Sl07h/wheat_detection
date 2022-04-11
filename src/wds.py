@@ -97,7 +97,6 @@ class WheatDetectionSystem():
             self.wheat_ears += self._calc_wheat_intersections(i)
         self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
 
-
     def draw_wheat_plots(self):
         ''' отрисовка числа колосьев на каждой делянке '''
         feature_group_choropleth = folium.FeatureGroup(
@@ -970,29 +969,33 @@ def calc_image_size(flight_altitude_m, fov_deg, width_px, height_px):
     return width_m, height_m
 
 
-LENGTH_OF_1_DEGREE_IN_METERS = 111134.861111111111111111111111111
+# вместо WGS пока сфера, растянутая центробежной силой
+# https://en.wikipedia.org/wiki/Circumference_of_the_Earth
+EARTH_CIRCUMFERENSE_ALONG_MERIDIAN_KM = 40007.863
+EARTH_CIRCUMFERENSE_ALONG_EQUATOR_KM  = 40075.017
+LENGTH_OF_1_LAT_DEGREE_M = 1000 * EARTH_CIRCUMFERENSE_ALONG_MERIDIAN_KM / 360.0
+LENGTH_OF_1_LONG_DEGREE_M = 1000 * EARTH_CIRCUMFERENSE_ALONG_EQUATOR_KM / 360.0
 
-def convert_lat_to_meters(latitude):
-    ''' Широта. https://v-ipc.ru/guides/coord '''
-    return latitude * LENGTH_OF_1_DEGREE_IN_METERS
+def convert_lat_to_meters(latitude_deg):
+    ''' Широта '''
+    return latitude_deg * LENGTH_OF_1_LAT_DEGREE_M
 
 
 def convert_meters_to_lat(latitude_m):
     ''' Широта '''
-    return latitude_m / LENGTH_OF_1_DEGREE_IN_METERS
+    return latitude_m / LENGTH_OF_1_LAT_DEGREE_M
 
 
-def convert_long_to_meters(longitude, latitude):
+def convert_long_to_meters(longitude_deg, latitude_deg):
     ''' Долгота '''
-    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
-    return longitude * ratio
+    ratio = LENGTH_OF_1_LONG_DEGREE_M * cos(radians(latitude_deg))
+    return longitude_deg * ratio
 
 
-def convert_meters_to_long(longitude_m, latitude):
+def convert_meters_to_long(longitude_m, latitude_deg):
     ''' Долгота '''
-    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
+    ratio = LENGTH_OF_1_LONG_DEGREE_M * cos(radians(latitude_deg))
     return longitude_m / ratio
-
 
 
 def calc_image_border(latitude, longtitude, width_m, height_m, yaw_deg):
