@@ -498,14 +498,14 @@ class WheatDetectionSystem():
                 index, d_lat, d_long, grid_size_m, grid_size_px,
                 True, yaw, True)
 
+
+        try_to_make_dir(f'{self.path_field_day}/grid_{grid_size_m:.2f}')
         for i,j in d.keys():
             # нормируем, пропуская пиксели в которых нет изображений и считаем индекс
             a = np.array(d_images_grid[i,j], np.float32)
             b = np.array(d_images_overlay[i,j], np.float32)
             division = np.divide(a, b, out=np.zeros_like(a), where=b!=0)
-            cv2.imwrite(f'tmp/{i}_{j}_a.png', a[::-1])
-            cv2.imwrite(f'tmp/{i}_{j}_b.png', b[::-1])
-            cv2.imwrite(f'tmp/{i}_{j}_div.png', division[::-1])
+            cv2.imwrite(f'{self.path_field_day}/grid_{grid_size_m:.2f}/{i}_{j}.png', division[::-1])
             res = np.mean(division / 255)
             grid[i][j] = float(res)
 
@@ -563,10 +563,10 @@ class WheatDetectionSystem():
         self.colormaps.append(colormap)
         print(' '*80 + f'\r[+] сетка {grid_size_m:.2f}x{grid_size_m:.2f} м^2, max % зелени: {max_p:.2f}')
     
-    def draw_masks(self, grid_size_m, pref):
+    def draw_masks(self, grid_size_m):
         ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'{pref} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            name=f'сетка {grid_size_m:.2f}x{grid_size_m:.2f}м²',
             # overlay=False,
             show=False
         )
@@ -574,11 +574,10 @@ class WheatDetectionSystem():
         d_lat = convert_meters_to_lat(grid_size_m)
         d_long = convert_meters_to_long(grid_size_m, self.latitude)
 
-        filenames = os.listdir('tmp')
-        filenames = glob.glob(f'tmp/*{pref}.png')
+        filenames = glob.glob(f'{self.path_field_day}/grid_{grid_size_m:.2f}/*.png')
         filenames = sorted(map(os.path.basename, filenames))
         for filename in filenames:
-            i,j = filename.split('_')[:2]
+            i,j = filename[:-4].split('_')
             i = int(i)
             j = int(j)
             bounds = [
@@ -587,7 +586,7 @@ class WheatDetectionSystem():
             ]
             folium.raster_layers.ImageOverlay(
                 name="Инструмент для разметки делянок",
-                image=f'tmp/{filename}',
+                image=f'{self.path_field_day}/grid_{grid_size_m:.2f}/{filename}',
                 bounds=bounds,
                 opacity=1.0,
                 control=False,

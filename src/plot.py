@@ -8,7 +8,5 @@ wds.create_map()
 wds.draw_protocol()
 wds.draw_vegetation([grid_size_m])
 # wds.draw_images_on_map(False) # , tile_size_over = 1.0]
-# wds.draw_masks(0.1, 'a')
-# wds.draw_masks(0.1, 'b')
-wds.draw_masks(grid_size_m, 'div')
+wds.draw_masks(grid_size_m)
 wds.save_map()
