@@ -66,8 +66,8 @@ class WheatDetectionSystem():
         self.df_metadata = pd.read_csv(self.path_log_metadata)
         self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
         print(f'Считал файл: {self.path_log_metadata}')
-        self.latitude = float(self.df_metadata['lat'][0])
-        self.longtitude = float(self.df_metadata['long'][0])
+        self.latitude = float(self.df_metadata['latitude'][0])
+        self.longtitude = float(self.df_metadata['longtitude'][0])
         # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
         self.image_borders = list(self.df_metadata['border'])
         lat = np.array(self.image_borders).flatten()[::2]
@@ -89,14 +89,13 @@ class WheatDetectionSystem():
 
     def perform_calculations(self):
         ''' считаем колосья в прямоугольниках карты плотности и делянках '''
-        self.adjacent_frames = find_intersections(self.image_borders)
+        self.adjacent_frames = calc_adjacency_list(self.image_borders)
         print('Нашёл пересечение кадров')
         n = len(self.filenames)
         for i in range(n):
             print(f'{i} / {n}')
             self.wheat_ears += self._calc_wheat_intersections(i)
         self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
-
 
     def draw_wheat_plots(self):
         ''' отрисовка числа колосьев на каждой делянке '''
@@ -109,13 +108,8 @@ class WheatDetectionSystem():
 
             max_p = np.amax(self.ears_in_polygons)
             for i in range(num_of_polygons):
-                # max_p:  val = 1  ->  (0,255,0)
-                # min_p:  val = 0  ->  (221,221,221)
                 val = self.ears_in_polygons[i] / max_p
-                hex_val = hex(int((1 - val) * 221))[2:]
-                if len(hex_val) == 1:
-                    hex_val = '0'+hex_val
-                color = f'#{hex_val}dd{hex_val}'
+                hex_color = calc_hex_color(val)
 
                 t = np.array(data['features'][i]['geometry']['coordinates'][0])
                 t[:, [0, 1]] = t[:, [1, 0]]
@@ -130,7 +124,7 @@ class WheatDetectionSystem():
                                color='#303030',
                                opacity=0.05,
                                fill=True,
-                               fill_color=color,
+                               fill_color=hex_color,
                                fill_opacity=1.0
                                )\
                     .add_child(folium.Popup(f'{str_wheat_type}\n{self.ears_in_polygons[i]}')) \
@@ -152,19 +146,19 @@ class WheatDetectionSystem():
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
             filename = line['name']
-            height = line['height']
-            gimbal_yaw   = line['gimbal_yaw']
-            gimbal_pitch = line['gimbal_pitch']
-            gimbal_roll  = line['gimbal_roll']
-            flight_yaw   = line['flight_yaw']
-            flight_pitch = line['flight_pitch']
-            flight_roll  = line['flight_roll']
+            flight_altitude_m = line['flight_altitude_m']
+            gimbal_yaw_deg   = line['gimbal_yaw_deg']
+            gimbal_pitch_deg = line['gimbal_pitch_deg']
+            gimbal_roll_deg  = line['gimbal_roll_deg']
+            flight_yaw_deg   = line['flight_yaw_deg']
+            flight_pitch_deg = line['flight_pitch_deg']
+            flight_roll_deg  = line['flight_roll_deg']
             border = line['border']
             _, color_polyline, popup_str = check_protocol_correctness(
                 filename, 
-                gimbal_yaw, gimbal_pitch, gimbal_roll,
-                flight_yaw, flight_pitch, flight_roll,
-                height
+                gimbal_yaw_deg, gimbal_pitch_deg, gimbal_roll_deg,
+                flight_yaw_deg, flight_pitch_deg, flight_roll_deg,
+                flight_altitude_m
             )
             iframe = folium.IFrame(html=popup_str, width=250, height=200)
             folium.PolyLine(border, color=color_polyline) \
@@ -183,8 +177,7 @@ class WheatDetectionSystem():
             data = self.df_metadata.loc[i]
             filename = data['name']
             is_OK = data['is_OK']
-            height = data['height']
-            yaw = data['gimbal_yaw']
+            yaw = data['gimbal_yaw_deg']
             border = data['border']
 
             path_img_src = f'{self.path_field_day}/src/{filename}'
@@ -263,9 +256,9 @@ class WheatDetectionSystem():
             show=False
         )
 
-        ratio = 31.0 * cos(radians(self.latitude))
-        d_lat = convert_to_decimal(0.0, 0.0, grid_size_m / 31.0)
-        d_long = convert_to_decimal(0.0, 0.0, grid_size_m / ratio)
+        d_lat = convert_meters_to_lat(grid_size_m)
+        d_long = convert_meters_to_long(grid_size_m, self.latitude)
+
         delta_lat = self.lat_max - self.lat_min
         delta_long = self.long_max - self.long_min
         n_lat = int(delta_lat / d_lat)
@@ -314,20 +307,13 @@ class WheatDetectionSystem():
                         [lat_e, long_e],
                         [lat_e, long_b]
                     ])
-
-                    # max_p:  val = 1  ->  (0,255,0)
-                    # min_p:  val = 0  ->  (221,221,221)
-                    val = wheat_counts[i][j] / max_p
-                    hex_val = hex(int((1 - val) * 221))[2:]
-                    if len(hex_val) == 1:
-                        hex_val = '0'+hex_val
-                    color = f'#{hex_val}dd{hex_val}'
-
+                    value = wheat_counts[i][j] / max_p
+                    hex_color = calc_hex_color(value)
                     folium.Rectangle(coordinates[i][j],
                                      color='#303030',
                                      opacity=0.05,
                                      fill=True,
-                                     fill_color=color,
+                                     fill_color=hex_color,
                                      fill_opacity=1.0
                                      )\
                         .add_child(folium.Popup(f'{wheat_counts[i][j]:.2f}')) \
@@ -339,36 +325,117 @@ class WheatDetectionSystem():
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
-    def _draw_vegetation(self, grid_size_m):
-        ''' отрисовываем долю зелёных пикселей на квадратную сетку grid_size_m * grid_size_m '''
-        feature_group_grid = folium.map.FeatureGroup(
-            name=f'vegetation grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
-            show=False
-        )
+    def _handle_image(
+        self, dir,
+        d_images_grid, d_images_overlay,
+        image_index, d_lat, d_long, grid_size_m, grid_size_px,
+        is_OK, yaw, do_calc_overlay_dict=False
+    ):
+        ''' Этапы:
+        1. считываем оригинальное изображение
+        2. поворачиваем
+        3. наращиваем до размеров сетки
+        4. делаем маску изображения
+        5. сохраняем в таблице кусочки в заданном разрешении '''
 
-        # определяем размер сетки
-        ratio = 31.0 * cos(radians(self.latitude))
-        d_lat = convert_to_decimal(0.0, 0.0, grid_size_m / 31.0)
-        d_long = convert_to_decimal(0.0, 0.0, grid_size_m / ratio)
-        delta_lat = self.lat_max - self.lat_min
-        delta_long = self.long_max - self.long_min
-        n_lat = int(delta_lat / d_lat)
-        n_long = int(delta_long / d_long)
+        # если протокол нарушен, то пропускаем изображение
+        if not (is_OK or self.do_show_uncorrect):
+            return d_images_grid, d_images_overlay
 
-        grid = np.zeros((n_lat+1, n_long+1))
-        coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
+        tmp = np.array(self.image_borders[image_index]).T
+        img_lat_min = tmp[0].min()
+        img_lat_max = tmp[0].max()
+        img_long_min = tmp[1].min()
+        img_long_max = tmp[1].max()
+        img_lat_m = convert_lat_to_meters(img_lat_max - img_lat_min)
+        img_long_m = convert_long_to_meters(img_long_max - img_long_min, self.latitude)
 
+        i_min = int((img_lat_min  - self.lat_min) / d_lat)
+        j_min = int((img_long_min - self.long_min) / d_long)
+        i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
+        j_max = int((img_long_max - self.long_min) / d_long) + 1
 
-        '''
-        Новый алгоритм рассчёта пересечений:
-        1. считаем границы всей сетки
-        2. для каждого квадрата рассчитать с какими изображениями есть пересечение
-        3. зная список смежных изображений вырезать куски и соединить их через логическое ИЛИ.
-        4. рассчитать индекс
-        '''
+        path_src = f'{self.path_field_day}/{dir}/{self.filenames[image_index][:-4]}.png' #{self.filenames[image_index][:-4]}.png'
+        image_src = cv2.imread(path_src, 0)
+        # image_src[:,:100] = 255
+        # image_src[:,-100:] = 255
+        # image_src[:100,:] = 255
+        # image_src[-100:,:] = 255
+
+        img_rotated = rotate_image(image_src, -yaw)
+        img_rotated = img_rotated[::-1] # чтобы координатные оси совпадали
+        h, w = img_rotated.shape[:2]
+
+        # рассчитываем padding в градусах и пикселях
+        pad_b_ratio = ((img_lat_min - self.grid_lat_min) % d_lat) / d_lat
+        pad_t_ratio = ((self.grid_lat_max - img_lat_max) % d_lat) / d_lat
+        pad_l_ratio = ((img_long_min - self.grid_long_min) % d_long) / d_long
+        pad_r_ratio = ((self.grid_long_max - img_long_max) % d_long) / d_long
+        pad_b_px =  int(h * pad_b_ratio * grid_size_m / img_lat_m)
+        pad_t_px =  int(h * pad_t_ratio * grid_size_m / img_lat_m)
+        pad_l_px =  int(w * pad_l_ratio * grid_size_m / img_long_m)
+        pad_r_px =  int(w * pad_r_ratio * grid_size_m / img_long_m)
+        pad_t_px, pad_b_px = pad_b_px, pad_t_px # чтобы координатные оси совпадали
+
+        # print(f'{pad_b_ratio:.1f} {pad_t_ratio:.1f}    {pad_l_ratio:.1f} {pad_r_ratio:.1f}')
+        # print(f'{pad_b_px:.1f} {pad_t_px:.1f}    {pad_l_px:.1f} {pad_r_px:.1f}')
+
+        new_image = cv2.copyMakeBorder(
+            img_rotated,
+            pad_t_px, pad_b_px,
+            pad_l_px, pad_r_px,
+            cv2.BORDER_CONSTANT, (0,0,0))
+        h, w = new_image.shape[:2]
+
+        # модифицируем таблицу
+        for i in range(i_min, i_max):
+            for j in range(j_min, j_max):
+                # h0 = h * 
+                h0 = int(float(h) * (i - i_min) / (i_max - i_min))
+                h1 = int(float(h) * (i - i_min + 1) / (i_max - i_min))
+                w0 = int(float(w) * (j - j_min) / (j_max - j_min))
+                w1 = int(float(w) * (j - j_min + 1) / (j_max - j_min))
+                img_crop = new_image[h0:h1, w0:w1]
+                img_crop = cv2.resize(img_crop, (grid_size_px, grid_size_px))
+                d_images_grid[i,j] += img_crop
+
+        if do_calc_overlay_dict == False:
+            return d_images_grid, d_images_overlay
+
+        # рассчитываем границу
+        mask = np.ones(image_src.shape, np.uint8)
+        img_overlay = rotate_image(mask, -yaw)
+        img_overlay = img_overlay[::-1] # чтобы координатные оси совпадали
+        img_overlay = cv2.copyMakeBorder(
+            img_overlay,
+            pad_t_px, pad_b_px,
+            pad_l_px, pad_r_px,
+            cv2.BORDER_CONSTANT, (0,0,0))
+       
+        # модифицируем таблицу
+        for i in range(i_min, i_max):
+            for j in range(j_min, j_max):
+                h0 = int(float(h) * (i - i_min) / (i_max - i_min))
+                h1 = int(float(h) * (i - i_min + 1) / (i_max - i_min))
+                w0 = int(float(w) * (j - j_min) / (j_max - j_min))
+                w1 = int(float(w) * (j - j_min + 1) / (j_max - j_min))
+                img_crop = img_overlay[h0:h1, w0:w1]
+                img_crop = cv2.resize(img_crop, (grid_size_px, grid_size_px))
+                d_images_overlay[i,j] += img_crop
+
+        return d_images_grid, d_images_overlay
+
+    def _create_grid_from_images(self, dir, grid_size_m, grid_size_px = 200):
+        ''' @brief строим сетку изображений из диретории dir
+        @param dir строка папки [src/ndvi/etc.]
+        @param grid_size_m размер кусочка плитки в метрах
+        @param grid_size_px размер кусочка плитки в пикселях '''
+        d_lat = convert_meters_to_lat(grid_size_m)
+        d_long = convert_meters_to_long(grid_size_m, self.latitude)
         # запоминаем какие изображения попадают в каждый элемент сетки
         d = defaultdict(list)
-        d_images_grid = defaultdict(lambda: np.zeros((500, 500), np.uint8))
+        d_images_grid = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.int16))
+        d_images_overlay = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.uint8))
         for index in range(len(self.filenames)):
             tmp = np.array(self.image_borders[index]).T
             img_lat_min = tmp[0].min()
@@ -382,62 +449,88 @@ class WheatDetectionSystem():
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
                     d[i,j].append(index)
-                    d_images_grid[i,j] = np.zeros((500, 500), np.uint8)
-        
+                    d_images_grid[i,j] = np.zeros((grid_size_px, grid_size_px), np.int16)
+                    d_images_overlay[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint8)
+
+        tmp = np.array(list(d.keys())).T
+        i_max = tmp[0].max() + 1
+        j_max = tmp[1].max() + 1
+        self.grid_lat_min = self.lat_min
+        self.grid_long_min = self.long_min
+        self.grid_lat_max = self.grid_lat_min + i_max * d_lat
+        self.grid_long_max = self.grid_long_min + j_max * d_long
+
         for index in range(len(self.filenames)):
-            tmp = np.array(self.image_borders[index]).T
-            img_lat_min = tmp[0].min()
-            img_lat_max = tmp[0].max()
-            img_long_min = tmp[1].min()
-            img_long_max = tmp[1].max()
-            img_delta_lat = img_lat_max - img_lat_min
-            img_delta_long = img_long_max - img_long_min
-            i_min = int((img_lat_min  - self.lat_min) / d_lat)
-            j_min = int((img_long_min - self.long_min) / d_long)
-            i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
-            j_max = int((img_long_max - self.long_min) / d_long) + 1
-            path_mask = f'{self.path_field_day}/mod/mask_{self.filenames[index][:-4]}.webp'
-            img = cv2.imread(path_mask, 0)
-            img = img[::-1] # чтобы координатные оси совпадали
-            h, w = img.shape
-            for i in range(i_min, i_max):
-                for j in range(j_min, j_max):
-                    # определяем координаты квадрата
-                    lat_b = self.lat_min + i*d_lat
-                    lat_e = lat_b + d_lat
-                    long_b = self.long_min + j*d_long
-                    long_e = long_b + d_long
-                    # переводим их в положение пикселей
-                    y_b = int(h * (lat_b - img_lat_min) / img_delta_lat)
-                    y_e = int(h * (lat_e - img_lat_min) / img_delta_lat)
-                    x_b = int(w * (long_b - img_long_min) / img_delta_long)
-                    x_e = int(w * (long_e - img_long_min) / img_delta_long)
-                    # выделяем кусок изображения
-                    pad_b = max(0, -y_b)        # наращиваем снизу
-                    pad_t = max(0, y_e - h)     # наращиваем сверху
-                    pad_l = max(0, -x_b)        # наращиваем слева
-                    pad_r = max(0, x_e - w)     # наращиваем справа
-                    y_b = max(0, y_b)
-                    y_e = min(h, y_e)
-                    x_b = max(0, x_b)
-                    x_e = min(w, x_e)
-                    img_region = np.zeros((y_e - y_b + pad_b + pad_t, x_e - x_b + pad_l + pad_r), np.uint8)
-                    img_region[pad_b:pad_b + y_e - y_b, pad_l:pad_l + x_e - x_b] = img[y_b:y_e, x_b:x_e]
-                    # print(i,j,index, img_region.shape)
-                    # растягиваем его до размера 500x500 и смотрим пересечение вместе с другими изображениями
-                    img_region = cv2.resize(img_region, (500, 500))
-                    d_images_grid[i,j] = cv2.bitwise_or(d_images_grid[i,j], img_region)
+            print(' '*80+f'\r{index} / {len(self.filenames)}', end='\r')
+            data = self.df_metadata.loc[index]
+            yaw = data['gimbal_yaw_deg']
+            d_images_grid, d_images_overlay = self._handle_image(
+                dir, d_images_grid, d_images_overlay,
+                index, d_lat, d_long, grid_size_m, grid_size_px,
+                True, yaw, True)
 
+        subdir = f'{self.path_field_day}/grid_{dir}_{grid_size_m:.2f}'
+        try_to_make_dir(subdir)
         for i,j in d.keys():
-            # считаем число зелёных (255) и остальных пикселей (0)
-            h, w = d_images_grid[i,j].shape
-            green = np.argwhere(d_images_grid[i,j] == 255).shape[0]
-            total = h * w
-            grid[i][j] += green / total
+            a = np.array(d_images_grid[i,j], np.float32)
+            b = np.array(d_images_overlay[i,j], np.float32)
+            # нормируем, пропуская пиксели в которых нет изображений и считаем индекс
+            division = np.divide(a, b, out=np.zeros_like(a), where=b!=0)
+            cv2.imwrite(f'{subdir}/{i}_{j}.png', division[::-1])
+        print(' '*80 + f'\r[+] {dir} сетка {grid_size_m:.2f}x{grid_size_m:.2f} м^2')
 
-        grid*=100
-        max_p = np.amax(grid)
+    def _draw_vegetation(self, grid_size_m, grid_size_px = 200):
+        ''' отрисовываем долю зелёных пикселей на квадратную сетку grid_size_m * grid_size_m '''
+        dir = 'masks'
+        self._create_grid_from_images(dir, grid_size_m, grid_size_px)
+        filenames = os.listdir(f'{self.path_field_day}/grid_{dir}_{grid_size_m:.2f}')
 
+        grid = np.ndarray((len(filenames), 3))
+        for index, filename in enumerate(filenames):
+            i, j = filename[:-4].split('_')
+            i = int(i)
+            j = int(j)
+            image = cv2.imread(f'{self.path_field_day}/grid_{dir}_{grid_size_m:.2f}/{i}_{j}.png')
+            grid[index] = np.array([i, j, 100.0*np.mean(image / 255)])
+        max_value = np.max(grid.T[2])
+        grid.T[2] /=max_value
+
+
+        d_lat = convert_meters_to_lat(grid_size_m)
+        d_long = convert_meters_to_long(grid_size_m, self.latitude)
+        feature_group_grid = folium.map.FeatureGroup(
+            name=f'vegetation grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            show=True
+        )
+        # divide count of objects by region area
+        for i, j, value in grid:
+            lat_b = self.lat_min + i*d_lat
+            lat_e = lat_b + d_lat
+            long_b = self.long_min + j*d_long
+            long_e = long_b + d_long
+            coordinates = np.array([
+                [lat_b, long_b],
+                [lat_e, long_e]
+            ])
+            hex_color = calc_hex_color(value)
+            folium.Rectangle(coordinates,
+                                color='#303030',
+                                opacity=0.05,
+                                fill=True,
+                                fill_color=hex_color,
+                                fill_opacity=1.0
+                                )\
+                .add_child(folium.Popup(f'{i} {j}    {value:.2f}')) \
+                .add_to(feature_group_grid)
+        colormap = folium.LinearColormap(['#dddddd', '#00ff00'], vmin=0, vmax=max_value).to_step(5)
+        colormap.caption = 'share of green land, %'
+        self.layers.append(feature_group_grid)
+        self.colormaps.append(colormap)
+    
+    def _save_to_klm(self, grid, grid_size_m):
+        ''' @brief сохраняем сетку к .klm файл
+        @param grid [i, j, value]
+        @param grid_size_m размер сетки '''
         f = open(f'{self.prefix_string}.vegetation_grid_{grid_size_m:.2f}.klm', 'w')
         f.write('''<?xml version="1.0" encoding="utf-8" ?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
@@ -447,48 +540,144 @@ class WheatDetectionSystem():
 </Schema>
 <Folder><name>canopy_example</name>
 ''')
-        # divide count of objects by region area
-        for i in range(n_lat):
-            for j in range(n_long):
-                if grid[i][j] > 0:
-                    lat_b = self.lat_min + i*d_lat
-                    lat_e = lat_b + d_lat
-                    long_b = self.long_min + j*d_long
-                    long_e = long_b + d_long
-                    coordinates[i][j] = np.array([
-                        [lat_b, long_b],
-                        [lat_b, long_e],
-                        [lat_e, long_e],
-                        [lat_e, long_b]
-                    ])
-
-                    # max_p:  val = 1  ->  (0,255,0)
-                    # min_p:  val = 0  ->  (221,221,221)
-                    val = grid[i][j] / max_p
-                    hex_val = hex(int((1 - val) * 221))[2:]
-                    if len(hex_val) == 1:
-                        hex_val = '0'+hex_val
-                    color = f'#{hex_val}dd{hex_val}'
-
-                    self._save_grid_element_to_klm(f, coordinates[i][j], grid[i][j], color)
-                    folium.Rectangle(coordinates[i][j],
-                                     color='#303030',
-                                     opacity=0.05,
-                                     fill=True,
-                                     fill_color=color,
-                                     fill_opacity=1.0
-                                     )\
-                        .add_child(folium.Popup(f'{grid[i][j]:.2f}')) \
-                        .add_to(feature_group_grid)
+        d_lat = convert_meters_to_lat(grid_size_m)
+        d_long = convert_meters_to_long(grid_size_m, self.latitude)
+        for i, j, value in grid:
+            lat_b = self.lat_min + i*d_lat
+            lat_e = lat_b + d_lat
+            long_b = self.long_min + j*d_long
+            long_e = long_b + d_long
+            coordinates = np.array([
+                [lat_b, long_b],
+                [lat_b, long_e],
+                [lat_e, long_e],
+                [lat_e, long_b]
+            ])
+            hex_color = calc_hex_color(value)
+            self._save_grid_element_to_klm(f, coordinates, value, hex_color)
         f.write('\n</Folder>\n</Document></kml>')
         f.close()
-        colormap = folium.LinearColormap(
-            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'share of green land, %'
+
+    def draw_masks(self):
+        ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
+        dirs = glob.glob(f'{self.path_field_day}/grid*')
+        dirs = sorted(map(os.path.basename, dirs))
+        for dir in dirs:
+            _, type, grid_size_m = dir.split('_')
+            grid_size_m = float(grid_size_m)
+            feature_group_grid = folium.map.FeatureGroup(
+                name=f'сетка {type} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+                show=False
+            )
+
+            d_lat = convert_meters_to_lat(grid_size_m)
+            d_long = convert_meters_to_long(grid_size_m, self.latitude)
+
+            filenames = glob.glob(f'{self.path_field_day}/{dir}/*.png')
+            filenames = sorted(map(os.path.basename, filenames))
+            for filename in filenames:
+                i, j = filename[:-4].split('_') # i_j.png
+                i = int(i)
+                j = int(j)
+                bounds = [
+                    [self.lat_min + i*d_lat, self.long_min + j*d_long],
+                    [self.lat_min + (i+1)*d_lat, self.long_min + (j+1)*d_long],
+                ]
+                folium.raster_layers.ImageOverlay(
+                    name="Инструмент для разметки делянок",
+                    image=f'{self.path_field_day}/{dir}/{filename}',
+                    bounds=bounds,
+                    opacity=1.0,
+                    control=False,
+                    zindex=1,
+                ).add_to(feature_group_grid)
+
+            self.layers.append(feature_group_grid)
+
+    def _create_tiles(self):
+        ''' @brief собирает плитку 200x200 в большие изображения и сжимает до 1000x1000 '''
+        subdir = 'masks'
+        grid_size_m = 0.2
+        dir = f'grid_{subdir}_{grid_size_m:.2f}'
+        self.unite_every_k_images = 10
+        filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
+        filenames = sorted(map(os.path.basename, filenames))
+        path = f'{self.path_field_day}/{dir}/{filenames[0]}'
+        grid_size_px, _ = cv2.imread(f'{self.path_field_day}/{dir}/{filenames[0]}', 0).shape
+        print(grid_size_px)
+        # определяем какие плитки останутся
+        d_images_grid = set()
+        for filename in filenames:
+            i, j = filename[:-4].split('_') # i_j.png
+            i_tile = int(i) // self.unite_every_k_images
+            j_tile = int(j) // self.unite_every_k_images
+            d_images_grid |= {f'{i_tile}_{j_tile}'}
+        # собираем эти плитки
+        d_images_grid = sorted(d_images_grid)
+        tile_size = grid_size_px * self.unite_every_k_images
+        for i_j_str in d_images_grid:
+            i_tile, j_tile = i_j_str.split('_')
+            i_tile = int(i_tile)
+            j_tile = int(j_tile)
+            tile = np.zeros((tile_size, tile_size), np.uint8)
+            for filename in filenames:
+                i, j = filename[:-4].split('_') # i_j.png
+                i = int(i)
+                j = int(j)
+                i_src, j_src = i, j
+                i %= self.unite_every_k_images
+                j %= self.unite_every_k_images
+                if i_tile <= i_src / self.unite_every_k_images < i_tile + 1 and j_tile <= j_src / self.unite_every_k_images < j_tile + 1:
+                    im = cv2.imread(f'{self.path_field_day}/{dir}/{filename}', 0)
+                    tile[tile_size - (i+1)*grid_size_px:tile_size - i*grid_size_px, j*grid_size_px:(j+1)*grid_size_px] = im#[::-1]
+                    # cv2.putText(tile, f'{i}_{j}', (i*grid_size_px,j*grid_size_px + 200), cv2.FONT_HERSHEY_COMPLEX, 2, (64, 64, 64),1,2)
+                    # cv2.putText(tile, f'{i_src}_{j_src}', (i*grid_size_px,j*grid_size_px + 100), cv2.FONT_HERSHEY_COMPLEX, 2, (64, 64, 64),1,2)
+            
+            # for i in range(unite_every_k_images):
+            #     tile[i*grid_size_px,:] = 128
+            #     tile[:,i*grid_size_px] = 128
+                #cv2.putText(tile, f'{i}_{i}', (i*grid_size_px,i*grid_size_px + 100), cv2.FONT_HERSHEY_COMPLEX, 2, (255, 255, 255),1,2)
+            tile = cv2.resize(tile, (1000, 1000))
+            cv2.imwrite(f'{self.path_field_day}/tiles/{i_tile}_{j_tile}.png', tile)
+
+    def draw_tiles(self):
+        ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
+        self._create_tiles()
+        grid_size_m = 0.2
+        unite_every_k_images = 10
+        tile_size = grid_size_m * unite_every_k_images
+        # _, type, grid_size_m = dir.split('_')
+        feature_group_grid = folium.map.FeatureGroup(
+            name=f'сетка {tile_size:.2f}x{tile_size:.2f}м²',
+            show=False
+        )
+
+        d_lat = convert_meters_to_lat(tile_size)
+        d_long = convert_meters_to_long(tile_size, self.latitude)
+        print(tile_size)
+
+        filenames = glob.glob(f'{self.path_field_day}/tiles/*.png')
+        filenames = sorted(map(os.path.basename, filenames))
+        for filename in filenames:
+            i, j = filename[:-4].split('_') # i_j.png
+            i = int(i)
+            j = int(j)
+            bounds = [
+                [self.lat_min + i*d_lat, self.long_min + j*d_long],
+                [self.lat_min + (i+1)*d_lat, self.long_min + (j+1)*d_long],
+            ]
+            folium.raster_layers.ImageOverlay(
+                name="Инструмент для разметки делянок",
+                image=f'{self.path_field_day}/tiles/{filename}',
+                bounds=bounds,
+                opacity=1.0,
+                control=False,
+                zindex=1,
+            ).add_to(feature_group_grid)
+
         self.layers.append(feature_group_grid)
-        self.colormaps.append(colormap)
-        print(' '*80 + f'\r[+] сетка {grid_size_m:.2f}x{grid_size_m:.2f} м^2, max % зелени: {max_p:.2f}')
-    
+
+
     def _rotate_and_save(self, path_src, path_mod, yaw, max_image_size, do_rewrite, is_OK):
         if not os.path.exists(path_mod) or do_rewrite and (is_OK or self.do_show_uncorrect):
             image = cv2.imread(path_src)
@@ -501,9 +690,10 @@ class WheatDetectionSystem():
             cv2.imwrite(path_mod, new_image)
 
     def _read_coords_and_p(self, df, i):
+        ''' @brief читаем координаты и вероятности колосьев \n return coords_and_p[lat, long, p] '''
         coords_and_p = []
         l = df.iloc[i].values[1]
-        try:
+        try: # если ничего не обнаружили
             if isnan(l):
                 return coords_and_p
         except:
@@ -515,52 +705,47 @@ class WheatDetectionSystem():
             p = float(l[j])
             if p > self.activation_treshold:
                 lat = int(float(l[j+1])) + int(float(l[j+3])) // 2
-                lon = int(float(l[j+2])) + int(float(l[j+4])) // 2
-                coords_and_p.append([lat, lon, p])
+                long = int(float(l[j+2])) + int(float(l[j+4])) // 2
+                coords_and_p.append([lat, long, p])
         return coords_and_p
 
     def _calc_wheat_intersections(self, df_i):
         ''' поворачиваем колоски по азимуту и нормируем, поподающие в несколько изображений '''
         data = self.df_metadata.loc[df_i]
-        is_OK = data['is_OK']
-        W = data['W']
-        H = data['H']
-        latitude = data['lat']
-        longtitude = data['long']
-        yaw = data['gimbal_yaw']
+        is_OK       = data['is_OK']
+        width_m     = data['width_m']
+        height_m    = data['height_m']
+        latitude    = data['latitude']
+        longtitude  = data['longtitude']
+        yaw_deg     = data['gimbal_yaw_deg']
 
-        ratio = 31.0 * cos(radians(latitude))
-        a = radians(-yaw)
-        sin_a = sin(a)
-        cos_a = cos(a)
-        W = W / 2
-        H = H / 2
+        yaw_rad = radians(-yaw_deg)
+        sin_a = sin(yaw_rad)
+        cos_a = cos(yaw_rad)
+        width_m /= 2
+        height_m /= 2
         tmp_im = cv2.imread(f'{self.path_field_day}/src/{self.filenames[0]}')
-        H_pixels, W_pixels, _ = tmp_im.shape
-        H_pixels /= 2
-        W_pixels /= 2
+        height_px, width_px, _ = tmp_im.shape
+        height_px /= 2
+        width_px /= 2
 
         if is_OK or self.do_show_uncorrect:
             coords_and_p = self._read_coords_and_p(self.df_bboxes, df_i)
             for i in range(len(coords_and_p)):
                 x, y, p = coords_and_p[i]
-                x = (x - W_pixels) / W_pixels * W
-                y = (1.0 - (y - H_pixels)) / H_pixels * H
+                x = width_m *  (x - width_px) / width_px
+                y = height_m * (1.0 - (y - height_px)) / height_px
                 point = np.array([y, x], dtype=float)
-                X, Y = rotate(point, sin_a, cos_a)
-                dx = convert_to_decimal(0.0, 0.0, X / ratio)
-                dy = convert_to_decimal(0.0, 0.0, Y / 31.0)
-                y = dy + latitude
-                x = dx + longtitude
-                point = Point(y, x)
+                Y, X = rotate(point, sin_a, cos_a)
+                dy = convert_meters_to_lat(Y)
+                dx = convert_meters_to_long(X, latitude)
+                point = Point([dy + latitude, dx + longtitude])
                 w = 1.0
                 for j in self.adjacent_frames[df_i]:
                     polygon = Polygon(np.array(self.image_borders[j]))
                     if polygon.contains(point):
                         w += 1.0
-                coords_and_p[i][0] = y
-                coords_and_p[i][1] = x
-                coords_and_p[i][2] = 1.0 / w
+                coords_and_p[i] = [y, x, 1.0 / w]
             return coords_and_p
         else:
             return []
@@ -763,24 +948,25 @@ def rotate_image(image, angle):
     return result
 '''
 
-def rotate_image(image, angleInDegrees):
+def rotate_image(image, angle_deg):
     h, w = image.shape[:2]
-    img_c = (w / 2, h / 2)
+    image_center = (w / 2.0, h / 2)
 
-    rot = cv2.getRotationMatrix2D(img_c, angleInDegrees, 1)
+    rot = cv2.getRotationMatrix2D(image_center, angle_deg, 1)
 
-    rad = radians(angleInDegrees)
-    sin_a = sin(rad)
-    cos_a = cos(rad)
+    angle_rad = radians(angle_deg)
+    sin_a = sin(angle_rad)
+    cos_a = cos(angle_rad)
     b_w = int((h * abs(sin_a)) + (w * abs(cos_a)))
     b_h = int((h * abs(cos_a)) + (w * abs(sin_a)))
 
-    rot[0, 2] += ((b_w / 2) - img_c[0])
-    rot[1, 2] += ((b_h / 2) - img_c[1])
+    rot[0, 2] += ((b_w / 2) - image_center[0])
+    rot[1, 2] += ((b_h / 2) - image_center[1])
 
     result = cv2.warpAffine(image, rot, (b_w, b_h), flags=cv2.INTER_LINEAR)
     return result
-    
+
+
 # преобразуем градусы, минуты и секунды в вешественную переменную координаты
 @njit
 def convert_to_decimal(degree, min, sec):
@@ -789,39 +975,52 @@ def convert_to_decimal(degree, min, sec):
         float(sec) / 3600.0
 
 
-# вращаем точку вокруг другой на заданный угол
 @njit
-def rotate(p, sin_a, cos_a):
-    y, x = p
+def rotate(point, sin_a, cos_a):
+    ''' @brief вращаем точку вокруг начала координат на заданный угол.
+    @param point - точка [lat, long] (y, x)
+    @param sin_a - синус угла
+    @param cos_a - косинус угла
+    @return Y, X '''
+    y, x = point
     X = x*cos_a - y*sin_a
     Y = x*sin_a + y*cos_a
-    return X, Y
+    return Y, X
 
 
-# проверяем соблюдение протокола съёмки
 def check_protocol_correctness(
     filename, 
-    gimbal_yaw, gimbal_pitch, gimbal_roll,
-    flight_yaw, flight_pitch, flight_roll,
-    height
+    gimbal_yaw_deg, gimbal_pitch_deg, gimbal_roll_deg,
+    flight_yaw_deg, flight_pitch_deg, flight_roll_deg,
+    flight_altitude_m
 ):
+    ''' @brief проверяем соблюдение протокола съёмки
+    @param filename - название файла
+    @param gimbal_yaw_deg - рысканье подвеса
+    @param gimbal_pitch_deg - тангаж подвеса
+    @param gimbal_roll_deg - крен подвеса
+    @param flight_yaw_deg - рысканье корпуса
+    @param flight_pitch_deg - тангаж корпуса
+    @param flight_roll_deg - крен корпуса
+    @param flight_altitude_m - высота полёта
+    @return is_OK, color_polyline, popup_str_new '''
     popup_str = f'<b>filename: {filename}</b><br>' + \
-                f'gimbal_yaw: {gimbal_yaw}º<br>' + \
-                f'gimbal_pitch: {gimbal_pitch}º<br>' + \
-                f'gimbal_roll: {gimbal_roll}º<br>' + \
-                f'flight_yaw: {flight_yaw}º<br>' + \
-                f'flight_pitch: {flight_pitch}º<br>' + \
-                f'flight_roll: {flight_roll}º<br>' + \
-                f'height: {height}'
+                f'gimbal_yaw_deg: {gimbal_yaw_deg}º<br>' + \
+                f'gimbal_pitch_deg: {gimbal_pitch_deg}º<br>' + \
+                f'gimbal_roll_deg: {gimbal_roll_deg}º<br>' + \
+                f'flight_yaw_deg: {flight_yaw_deg}º<br>' + \
+                f'flight_pitch_deg: {flight_pitch_deg}º<br>' + \
+                f'flight_roll_deg: {flight_roll_deg}º<br>' + \
+                f'flight_altitude_m: {flight_altitude_m}'
     color_polyline = '#007800'
     is_OK = True
 
     wrong_parameters = []
-    if abs(-90.0 - gimbal_pitch) >= 3.0:
+    if abs(-90.0 - gimbal_pitch_deg) >= 3.0:
         wrong_parameters.append('тангаж')
-    if abs(0.0 - gimbal_roll) >= 3.0:
+    if abs(0.0 - gimbal_roll_deg) >= 3.0:
         wrong_parameters.append('крен')
-    if abs(3.0 - height) > 0.2:
+    if abs(3.0 - flight_altitude_m) > 0.2:
         wrong_parameters.append('высота')
 
     # если протокол нарушен, то меняем цвет на красный и выводим ошибки
@@ -838,77 +1037,107 @@ def check_protocol_correctness(
     return is_OK, color_polyline, popup_str_new
 
 
-# рассчитываем охват земли по ширине и высоте, используя
-# относительную высоту полёта и угол обзора
 @njit
-def calc_image_size(height, fov, width_px, height_px):
-    diag = 2.0 * height * tan(radians(fov / 2.0))
+def calc_image_size(flight_altitude_m, fov_deg, width_px, height_px):
+    ''' рассчитываем размер охваченной области под изображением.
+    @param flight_altitude_m - высота полёта
+    @param fov_deg - угол обзора камеры
+    @param width_px - ширина изображения
+    @param height_px - высота изображения
+    @return width_m, height_m '''
+    diag_m = 2.0 * flight_altitude_m * tan(radians(fov_deg / 2.0))
     diag_px = sqrt(width_px**2 + height_px**2)
-    W = diag * width_px / diag_px
-    H = diag * height_px / diag_px
-    return W, H, diag
-
-LENGTH_OF_1_DEGREE_IN_METERS = 111134.861111111111111111111111111
-
-def convert_lat_to_meters(latitude):
-    ''' Широта. https://v-ipc.ru/guides/coord '''
-    return latitude * LENGTH_OF_1_DEGREE_IN_METERS
+    width_m  = (width_px  * diag_m) / diag_px
+    height_m = (height_px * diag_m) / diag_px
+    return width_m, height_m
 
 
+# вместо WGS пока сфера, растянутая центробежной силой
+# https://en.wikipedia.org/wiki/Circumference_of_the_Earth
+EARTH_CIRCUMFERENSE_ALONG_MERIDIAN_KM = 40007.863
+EARTH_CIRCUMFERENSE_ALONG_EQUATOR_KM  = 40075.017
+LENGTH_OF_1_LAT_DEGREE_M = 1000 * EARTH_CIRCUMFERENSE_ALONG_MERIDIAN_KM / 360.0
+LENGTH_OF_1_LONG_DEGREE_M = 1000 * EARTH_CIRCUMFERENSE_ALONG_EQUATOR_KM / 360.0
+
+@njit
+def convert_lat_to_meters(latitude_deg):
+    ''' @brief переводит градусы широты в метры 
+    @param latitude_deg - градус широты [-90, 90]
+    @return lat_length_m'''
+    lat_length_m = latitude_deg * LENGTH_OF_1_LAT_DEGREE_M
+    if -90 <= latitude_deg <= 90:
+        return lat_length_m
+    else:
+        raise ValueError
+    
+
+@njit
 def convert_meters_to_lat(latitude_m):
-    ''' Широта '''
-    return latitude_m / LENGTH_OF_1_DEGREE_IN_METERS
+    ''' @brief переводит метры в градусы широты
+    @param latitude_m - метры вдоль меридиана
+    @return latitude_deg'''
+    latitude_deg = latitude_m / LENGTH_OF_1_LAT_DEGREE_M
+    if -90 <= latitude_deg <= 90:
+        return latitude_deg
+    else:
+        raise ValueError
 
 
-def convert_lon_to_meters(longitude, latitude):
-    ''' Долгота '''
-    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
-    return longitude * ratio
+@njit
+def convert_long_to_meters(longitude_deg, latitude_deg):
+    ''' @brief переводит градусы долготы в метры
+    @param longitude_deg - градус долготы [-180, 180]
+    @return longitude_m'''
+    longitude_m = longitude_deg * LENGTH_OF_1_LONG_DEGREE_M * cos(radians(latitude_deg))
+    if -180 <= longitude_deg <= 180:
+        return longitude_m
+    else:
+        raise ValueError
 
 
-def convert_meters_to_lon(longitude_m, latitude):
-    ''' Долгота '''
-    ratio = LENGTH_OF_1_DEGREE_IN_METERS * cos(radians(latitude))
-    return longitude_m / ratio
+@njit
+def convert_meters_to_long(longitude_m, latitude_deg):
+    ''' @brief переводит метры в градусы долготы
+    @param longitude_m - метры вдоль Экватора
+    @return longitude_deg'''
+    longitude_deg = longitude_m / (LENGTH_OF_1_LONG_DEGREE_M * cos(radians(latitude_deg)))
+    if -180 <= longitude_deg <= 180:
+        return longitude_deg
+    else:
+        raise ValueError
 
 
-
-# рассчёт границы изображения
-# возвращает центр и граничные точки (5 штук, т.к. линия замкнутая)
-def calc_image_border(
-    latitude,
-    longtitude,
-    height,
-    fov,
-    yaw,
-    width_px, height_px
-):
-    W, H, diag = calc_image_size(height, fov, width_px, height_px)
-    ratio = 31.0 * cos(radians(latitude))
-
-    center = np.array([latitude, longtitude], dtype=float)
+def calc_image_border(latitude_deg, longtitude_deg, width_m, height_m, yaw_deg):
+    ''' @brief рассчёт границы изображения
+    @param latitude_deg - широта
+    @param longtitude_deg - долгота
+    @param width_m - ширина изображения
+    @param height_m - высота изображения
+    @param yaw_deg - рысканье
+    @return border[lat, long] '''
     points = np.array([
-        [-H/2.0, -W/2.0],
-        [-H/2.0, +W/2.0],
-        [+H/2.0, +W/2.0],
-        [+H/2.0, -W/2.0],
-        [-H/2.0, -W/2.0],
+        [-height_m/2.0, -width_m/2.0],
+        [-height_m/2.0, +width_m/2.0],
+        [+height_m/2.0, +width_m/2.0],
+        [+height_m/2.0, -width_m/2.0],
+        [-height_m/2.0, -width_m/2.0],
     ], dtype=float)
 
-    new_points = []
-    a = radians(-yaw)
-    sin_a = sin(a)
-    cos_a = cos(a)
-    for i, point in enumerate(points):
-        X, Y = rotate(point, sin_a, cos_a)
-        dx = convert_to_decimal(0.0, 0.0, X / ratio)
-        dy = convert_to_decimal(0.0, 0.0, Y / 31.0)
-        p = [dy + latitude, dx+longtitude]
-        new_points.append(p)
-    return W, H, center, new_points
+    border = []
+    yaw_rad = radians(-yaw_deg)
+    sin_a = sin(yaw_rad)
+    cos_a = cos(yaw_rad)
+    for point in points:
+        y_m, x_m = rotate(point, sin_a, cos_a)
+        dy_deg = convert_meters_to_lat(y_m)
+        dx_deg = convert_meters_to_long(x_m, latitude_deg)
+        border.append([dy_deg + latitude_deg, dx_deg+longtitude_deg])
+    return border
 
 
-def find_intersections(image_borders):
+def calc_adjacency_list(image_borders):
+    ''' @brief строит список смежных полигонов
+    @return adjacent_list[adj_image_1, adj_image_2,...] '''
     adjacent_list = []
     for i1, border1 in enumerate(image_borders):
         l = []
@@ -933,7 +1162,11 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
     # Image_23.jpg   True    5    3    12.34    12.34    2.7     120    -90     0.0   [[], [], [], []]
     # Image_24.jpg   False   12   7    45.67    45.67    6.0     130    -60     0.0   [[], [], [], []]
     # ...
-    src_file_count = len(os.listdir(f'{path_field_day}/src'))
+    src_files = []
+    for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
+        files = glob.glob(f'{path_field_day}/src/*.{datatype}')
+        src_files += sorted(map(os.path.basename, files))
+    src_file_count = len(src_files) 
     tmp_file_count = len(os.listdir(f'{path_field_day}/tmp'))
     print(src_file_count, tmp_file_count)
 
@@ -955,16 +1188,13 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
         df_metadata = pd.DataFrame(columns=[
             'name',
             'is_OK',
-            'W', 'H',
-            'lat', 'long',
-            'height',
-            'gimbal_yaw', 'gimbal_pitch', 'gimbal_roll',
-            'flight_yaw', 'flight_pitch', 'flight_roll',
+            'width_m', 'height_m',
+            'latitude', 'longtitude', 'flight_altitude_m',
+            'gimbal_yaw_deg', 'gimbal_pitch_deg', 'gimbal_roll_deg',
+            'flight_yaw_deg', 'flight_pitch_deg', 'flight_roll_deg',
             'border',
         ])
-        
-
-        
+           
         for filename in filenames:
             path_img = f'{path_field_day}/src/{filename}'
             path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
@@ -973,38 +1203,39 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
                 latitude = convert_to_decimal(*my_image.gps_latitude)
                 longtitude = convert_to_decimal(*my_image.gps_longitude)
             df = pd.read_csv(path_csv, index_col=0).T
-            width_px     = float(df['ExifImageWidth'][0])
-            height_px    = float(df['ExifImageHeight'][0])
-            gimbal_yaw   = float(df['GimbalYawDegree'][0])
-            gimbal_pitch = float(df['GimbalPitchDegree'][0])
-            gimbal_roll  = float(df['GimbalRollDegree'][0])
-            flight_yaw   = float(df['FlightYawDegree'][0])
-            flight_pitch = float(df['FlightPitchDegree'][0])
-            flight_roll  = float(df['FlightRollDegree'][0])
-            height       = float(df['RelativeAltitude'][0])
-            fov          = float(df['FOV'][0].split()[0])
+            width_px            = float(df['ExifImageWidth'][0])
+            height_px           = float(df['ExifImageHeight'][0])
+            gimbal_yaw_deg      = float(df['GimbalYawDegree'][0])
+            gimbal_pitch_deg    = float(df['GimbalPitchDegree'][0])
+            gimbal_roll_deg     = float(df['GimbalRollDegree'][0])
+            flight_yaw_deg      = float(df['FlightYawDegree'][0])
+            flight_pitch_deg    = float(df['FlightPitchDegree'][0])
+            flight_roll_deg     = float(df['FlightRollDegree'][0])
+            flight_altitude_m   = float(df['RelativeAltitude'][0])
+            fov_deg             = float(df['FOV'][0].split()[0])
             is_OK, _, _ = check_protocol_correctness(
                 filename, 
-                gimbal_yaw, gimbal_pitch, gimbal_roll,
-                flight_yaw, flight_pitch, flight_roll,
-                height
+                gimbal_yaw_deg, gimbal_pitch_deg, gimbal_roll_deg,
+                flight_yaw_deg, flight_pitch_deg, flight_roll_deg,
+                flight_altitude_m
             )
-            W, H, _, border = calc_image_border(latitude, longtitude, height, fov, gimbal_yaw, width_px, height_px)
+            width_m, height_m = calc_image_size(flight_altitude_m, fov_deg, width_px, height_px)
+            border = calc_image_border(latitude, longtitude, width_m, height_m, gimbal_yaw_deg)
             df_metadata = df_metadata.append({
-                'name':          filename,
-                'is_OK':         str(is_OK),
-                'W':             W,
-                'H':             H,
-                'lat':           latitude,
-                'long':          longtitude,
-                'height':        height,
-                'gimbal_yaw':    gimbal_yaw,
-                'gimbal_pitch':  gimbal_pitch,
-                'gimbal_roll':   gimbal_roll,
-                'flight_yaw':    flight_yaw,
-                'flight_pitch':  flight_pitch,
-                'flight_roll':   flight_roll,
-                'border':        border
+                'name':                 filename,
+                'is_OK':                str(is_OK),
+                'width_m':              width_m,
+                'height_m':             height_m,
+                'latitude':             latitude,
+                'longtitude':           longtitude,
+                'flight_altitude_m':    flight_altitude_m,
+                'gimbal_yaw_deg':       gimbal_yaw_deg,
+                'gimbal_pitch_deg':     gimbal_pitch_deg,
+                'gimbal_roll_deg':      gimbal_roll_deg,
+                'flight_yaw_deg':       flight_yaw_deg,
+                'flight_pitch_deg':     flight_pitch_deg,
+                'flight_roll_deg':      flight_roll_deg,
+                'border':               border
             }, ignore_index=True)
        
         df_metadata = df_metadata.sort_values(by=['name'])
@@ -1013,6 +1244,17 @@ def handle_metadata(filenames, path_field_day, path_log_metadata):
     except:
         print('[-] датафрейм не сформирован')
 
+def calc_hex_color(value):
+    ''' @brief отображает значение [0,1] в цвет [серый, зелёный]
+    max_p:  val = 1  ->  (0,255,0)
+    min_p:  val = 0  ->  (221,221,221)
+    @param value [0, 1]
+    @return hex_color '''
+    hex_val = hex(int((1 - value) * 221))[2:]
+    if len(hex_val) == 1:
+        hex_val = '0'+hex_val
+    hex_color = f'#{hex_val}dd{hex_val}'
+    return hex_color
 
 # https://discuss.pytorch.org/t/how-to-load-images-from-different-folders-in-the-same-batch/18942
 class WheatTestDataset(Dataset):
