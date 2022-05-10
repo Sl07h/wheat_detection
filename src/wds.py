@@ -66,6 +66,11 @@ class WheatDetectionSystem():
         self.df_metadata = pd.read_csv(self.path_log_metadata)
         self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
         print(f'[+] считал файл: {self.path_log_metadata}')
+
+        self.filenames = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['name']]
+        self.filenames = list(self.filenames['name'])
+        print(f'[+] отфильтровал нарушения протокола, некорректны: {self.df_metadata.shape[0] - len(self.filenames)} файлов')
+
         self.latitude = float(self.df_metadata['latitude'][0])
         self.longtitude = float(self.df_metadata['longtitude'][0])
         # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
@@ -141,8 +146,7 @@ class WheatDetectionSystem():
 
     def draw_protocol(self):
         ''' отображаем корректность протокола сьёмки изображений '''
-        feature_group_protocol = folium.FeatureGroup(
-            name='protocol', show=True)
+        feature_group_protocol = folium.FeatureGroup(name='protocol', show=True)
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
             filename = line['name']
@@ -406,7 +410,6 @@ class WheatDetectionSystem():
         filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
         filenames = sorted(map(os.path.basename, filenames))
         path_src = f'{self.path_field_day}/{dir}/{filenames[image_index]}'
-        print(path_src)
         image_src = cv2.imread(path_src, 0)
         # image_src[:,:100] = 255
         # image_src[:,-100:] = 255
@@ -1054,11 +1057,11 @@ def check_protocol_correctness(
     @param flight_altitude_m - высота полёта
     @return wrong_parameters['тангаж', 'крен', 'высота'] '''
     wrong_parameters = []
-    if abs(-90.0 - gimbal_pitch_deg) >= 3.0:
+    if abs(-90.0 - gimbal_pitch_deg) > 3.0:
         wrong_parameters.append('тангаж')
-    if abs(0.0 - gimbal_roll_deg) >= 3.0:
+    if abs(0.0 - gimbal_roll_deg) > 3.0:
         wrong_parameters.append('крен')
-    if abs(3.0 - flight_altitude_m) > 0.2:
+    if abs(3.0 - flight_altitude_m) > 0.3:
         wrong_parameters.append('высота')
     return wrong_parameters
 
