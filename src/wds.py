@@ -270,7 +270,8 @@ class WheatDetectionSystem():
             tiles=None,
             prefer_canvas=True,
             control_scale=True,
-            zoom_start=21
+            zoom_start=21,
+            zoom_control=False
         )
         base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
         folium.TileLayer(tiles='OpenStreetMap', max_zoom=25).add_to(base_map)
@@ -287,7 +288,7 @@ class WheatDetectionSystem():
             self.m.add_child(BindColormap(layer, colormap))
 
         export_filename = f'{self.path_field_day.split("/")[1]}.geojson'
-        Draw(position='topright', export=True, filename=export_filename).add_to(self.m)
+        Draw(position='topright', export=False, filename=export_filename).add_to(self.m)
         MeasureControl(position='bottomleft', collapsed=False).add_to(self.m)
         folium.map.LayerControl(position='topleft', collapsed=False).add_to(self.m)
 
@@ -697,7 +698,7 @@ class WheatDetectionSystem():
             #     tile[i*grid_size_px,:] = 128
             #     tile[:,i*grid_size_px] = 128
                 #cv2.putText(tile, f'{i}_{i}', (i*grid_size_px,i*grid_size_px + 100), cv2.FONT_HERSHEY_COMPLEX, 2, (255, 255, 255),1,2)
-            tile = cv2.resize(tile, (500, 500))
+            tile = cv2.resize(tile, (1500, 1500))
             cv2.imwrite(f'{self.path_field_day}/tiles_{tile_type}/{i_tile}_{j_tile}.webp', tile)
 
     def draw_tiles(self, tile_type):
