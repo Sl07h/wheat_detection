@@ -31,37 +31,25 @@ class WheatDetectionSystem():
         self,
         field: str,                     # 'Field_2021'
         attempt: str,                   # '1'
-        cnn_model: str,                 # 'frcnn'
-        kernel_size: str,               # '512'
         do_show_uncorrect: bool = True,  # True or False
-        activation_treshold: int = 0.7,  # 0.7
     ):
         self.path_field_day    = f'data/{field}/{attempt}'
         self.prefix_string     = f'data/{field}/{attempt}/log/{field}.{attempt}'
         self.path_log_metadata = f'{self.prefix_string}.metadata.csv'
-        self.path_log_bboxes   = f'{self.prefix_string}.{cnn_model}.{kernel_size}.bboxes.csv'
-        self.path_log_plots    = f'{self.prefix_string}.{cnn_model}.{kernel_size}.result.csv'
         self.path_to_geojson   = f'data/{field}/{field}.geojson'
         self.path_to_map       = f'maps/{field}.{attempt}.html'
-        self.cnn_model = cnn_model
-        self.kernel_size = int(kernel_size)
         self.do_show_uncorrect = do_show_uncorrect
-        self.activation_treshold = activation_treshold
-        self.max_image_size = 150
-        self.max_mask_size = 5472
-        self.filenames = []
-        for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
-            files = glob.glob(f'{self.path_field_day}/src/*.{datatype}')
-            self.filenames += sorted(map(os.path.basename, files))
+
+        # self.max_image_size = 150
+        # self.max_mask_size = 5472
         self.wheat_ears = []
         self.layers = []
         self.colormaps = []
-        # сокрытые от пользователя операции
-        make_dirs(self.path_field_day)        
 
-    def read_metadata(self):
+        # проверка или создание нужных директорий и файла df_metadata
+        make_dirs(self.path_field_day)        
         if not os.path.exists(self.path_log_metadata):
-            handle_metadata(self.filenames, self.path_field_day, self.path_log_metadata)
+            self._create_df_metadata()
 
         self.df_metadata = pd.read_csv(self.path_log_metadata)
         self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
@@ -69,12 +57,13 @@ class WheatDetectionSystem():
 
         self.filenames = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['name']]
         self.filenames = list(self.filenames['name'])
+        self.image_borders = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['border']]
+        self.image_borders = list(self.image_borders['border'])
         print(f'[+] отфильтровал нарушения протокола, некорректны: {self.df_metadata.shape[0] - len(self.filenames)} файлов')
 
         self.latitude = float(self.df_metadata['latitude'][0])
         self.longtitude = float(self.df_metadata['longtitude'][0])
         # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
-        self.image_borders = list(self.df_metadata['border'])
         lat = np.array(self.image_borders).flatten()[::2]
         long = np.array(self.image_borders).flatten()[1::2]
         self.lat_min = lat.min()
@@ -82,10 +71,112 @@ class WheatDetectionSystem():
         self.long_min = long.min()
         self.long_max = long.max()
 
-    def read_bboxes(self):
+
+
+    def _create_df_metadata(self):
+        ''' @brief вытягиваем метаданные в один csv-файл
+        1. парсим данные через exiftool и библиотеку exif
+        2. проверяем корректность протокола
+        3. рассчитываем координаты области под дроном
+        4. сохраняем всё в 1 файл
+        '''
+        src_filenames = []
+        for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
+            files = glob.glob(f'{self.path_field_day}/src/*.{datatype}')
+            src_filenames += sorted(map(os.path.basename, files))
+        src_file_count = len(src_filenames) 
+        tmp_file_count = len(os.listdir(f'{self.path_field_day}/tmp'))
+        print(f'[*] src_file_count: {src_file_count} tmp_file_count: {tmp_file_count}')
+
+        if src_file_count != tmp_file_count:
+            try:
+                for filename in src_filenames:
+                    path_img = f'{self.path_field_day}/src/{filename}'
+                    path_csv = f'{self.path_field_day}/tmp/{filename[:-4]}.csv'
+                    command = os.path.join('exiftool-12.34', f'exiftool -csv {path_img} > {path_csv}')
+                    os.system(command)
+                    df = pd.read_csv(path_csv, header=None).T
+                    df.to_csv(path_csv, header=False, index=False)
+            except:
+                print('[-] число файлов в src и tmp не совпало')
+        else:
+            print('[+] число файлов совпало')
+                
+        try:
+            df_metadata = pd.DataFrame(columns=[
+                'name',
+                'is_OK',
+                'width_m', 'height_m',
+                'latitude', 'longtitude', 'flight_altitude_m',
+                'gimbal_yaw_deg', 'gimbal_pitch_deg', 'gimbal_roll_deg',
+                'flight_yaw_deg', 'flight_pitch_deg', 'flight_roll_deg',
+                'border',
+            ])
+            
+            for filename in src_filenames:
+                path_img = f'{self.path_field_day}/src/{filename}'
+                basename = os.path.splitext(filename)[0]
+                path_csv = f'{self.path_field_day}/tmp/{basename}.csv'
+                with open(path_img, 'rb') as image_file:
+                    my_image = Image(image_file)
+                    latitude = convert_to_decimal(*my_image.gps_latitude)
+                    longtitude = convert_to_decimal(*my_image.gps_longitude)
+                df = pd.read_csv(path_csv, index_col=0).T
+                width_px            = float(df['ExifImageWidth'][0])
+                height_px           = float(df['ExifImageHeight'][0])
+                gimbal_yaw_deg      = float(df['GimbalYawDegree'][0])
+                gimbal_pitch_deg    = float(df['GimbalPitchDegree'][0])
+                gimbal_roll_deg     = float(df['GimbalRollDegree'][0])
+                flight_yaw_deg      = float(df['FlightYawDegree'][0])
+                flight_pitch_deg    = float(df['FlightPitchDegree'][0])
+                flight_roll_deg     = float(df['FlightRollDegree'][0])
+                flight_altitude_m   = float(df['RelativeAltitude'][0])
+                fov_deg             = float(df['FOV'][0].split()[0])
+                yaw_deg             = gimbal_yaw_deg
+
+                wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
+                is_OK = (len(wrong_parameters) == 0)
+                width_m, height_m = calc_image_size(flight_altitude_m, fov_deg, width_px, height_px)
+                border = calc_image_border(latitude, longtitude, width_m, height_m, yaw_deg)
+                df_metadata = df_metadata.append({
+                    'name':                 filename,
+                    'is_OK':                str(is_OK),
+                    'width_m':              width_m,
+                    'height_m':             height_m,
+                    'latitude':             latitude,
+                    'longtitude':           longtitude,
+                    'flight_altitude_m':    flight_altitude_m,
+                    'gimbal_yaw_deg':       gimbal_yaw_deg,
+                    'gimbal_pitch_deg':     gimbal_pitch_deg,
+                    'gimbal_roll_deg':      gimbal_roll_deg,
+                    'flight_yaw_deg':       flight_yaw_deg,
+                    'flight_pitch_deg':     flight_pitch_deg,
+                    'flight_roll_deg':      flight_roll_deg,
+                    'border':               border
+                }, ignore_index=True)
+        
+            df_metadata = df_metadata.sort_values(by=['name'])
+            df_metadata.to_csv(self.path_log_metadata, index=False)
+
+        except:
+            print('[-] датафрейм не сформирован')
+
+
+    def read_bboxes(
+        self,
+        cnn_model: str,                 # 'frcnn'
+        kernel_size: int,               # 512
+        activation_treshold: int = 0.7,  # 0.7
+):
         '''
         1. производим детекцию колосьев (если надо)
         2. считываем файл с диска '''
+
+        self.cnn_model = cnn_model
+        self.kernel_size = int(kernel_size)
+        self.activation_treshold = activation_treshold
+        self.path_log_bboxes   = f'{self.prefix_string}.{cnn_model}.{kernel_size}.bboxes.csv'
+        self.path_log_plots    = f'{self.prefix_string}.{cnn_model}.{kernel_size}.result.csv'
         if not os.path.exists(self.path_log_bboxes):
             self._detect_wheat_heads()
 
@@ -200,46 +291,6 @@ class WheatDetectionSystem():
     def draw_grids(self, size_list):
         for size in size_list:
             self._draw_grid(size)
-
-    def draw_images_on_map(self, do_rewrite=True):
-        feature_group_images = folium.FeatureGroup(name='images', show=False)
-        feature_group_masks = folium.FeatureGroup(name='masks', show=False)
-        for i in range(len(self.filenames)):
-            data = self.df_metadata.loc[i]
-            filename = data['name']
-            is_OK = data['is_OK']
-            yaw = data['gimbal_yaw_deg']
-            border = data['border']
-
-            path_img_src = f'{self.path_field_day}/src/{filename}'
-            path_img_mod = f'{self.path_field_day}/mod/{filename[:-4]}.webp'
-            path_mask_src = f'{self.path_field_day}/masks/model_2_mask_{filename[:-4]}.png'
-            path_mask_mod = f'{self.path_field_day}/mod/mask_{filename[:-4]}.webp'
-            
-            self._rotate_and_save(path_img_src, path_img_mod, yaw, self.max_image_size, do_rewrite, is_OK)
-            self._rotate_and_save(path_mask_src, path_mask_mod, yaw, self.max_mask_size, do_rewrite, is_OK)
-
-            ar = np.array(border).T
-            bounds = [[np.min(ar[0]), np.min(ar[1])], [np.max(ar[0]), np.max(ar[1])]]
-            if is_OK or self.do_show_uncorrect:
-                folium.raster_layers.ImageOverlay(
-                    name="Инструмент для разметки делянок",
-                    image=path_img_mod,
-                    bounds=bounds,
-                    opacity=1.0,
-                    control=False,
-                    zindex=1,
-                ).add_to(feature_group_images)
-                folium.raster_layers.ImageOverlay(
-                    name="Инструмент для разметки делянок",
-                    image=path_mask_mod,
-                    bounds=bounds,
-                    opacity=1.0,
-                    control=False,
-                    zindex=1,
-                ).add_to(feature_group_masks)
-        feature_group_images.add_to(self.m)
-        feature_group_masks.add_to(self.m)
     
     def create_mask(self, index_type = 'tgi'):
         if index_type == 'tgi':
@@ -250,22 +301,27 @@ class WheatDetectionSystem():
             print(f'[+] {self.path_field_day}/tgi уже существует')
             return None
         try_to_make_dir(f'{self.path_field_day}/tgi')
-        filenames = glob.glob(f'{self.path_field_day}/src/*')
-        filenames = sorted(map(os.path.basename, filenames))
-        for filename in filenames:
+        # filenames = glob.glob(f'{self.path_field_day}/src/*')
+        # filenames = sorted(map(os.path.basename, filenames))
+        for filename in self.filenames:
             path_img = f'{self.path_field_day}/src/{filename}'
             img = cv2.imread(path_img)
-            B, G, R = cv2.split(img)
-            b,r,p = -0.14114779800465022, -0.825274736150845, 16.039116721891254
-            tgi = b*B + G + r*R
-            _, mask_tgi = cv2.threshold(tgi, p, 255, cv2.THRESH_BINARY)
-            kernel = np.ones((6,6), np.uint8)
-            opening = cv2.morphologyEx(mask_tgi, cv2.MORPH_OPEN, kernel)
-            kernel_dilation = np.ones((70,70), np.uint8)
-            opening_dilation = cv2.dilate(opening, kernel_dilation, iterations = 1)
-            result = cv2.bitwise_and(opening_dilation, mask_tgi)
+            result = self._calc_tgi_cv2(img)
             filename=os.path.splitext(filename)[0]
             cv2.imwrite(f'{self.path_field_day}/tgi/{filename}.png', result)
+        print('[+] индекс tgi рассчитан')
+
+    def _calc_tgi_cv2(self, img):
+        B, G, R = cv2.split(img)
+        b,r,p = -0.14114779800465022, -0.825274736150845, 16.039116721891254
+        tgi = b*B + G + r*R
+        _, mask_tgi = cv2.threshold(tgi, p, 255, cv2.THRESH_BINARY)
+        kernel = np.ones((6,6), np.uint8)
+        opening = cv2.morphologyEx(mask_tgi, cv2.MORPH_OPEN, kernel)
+        kernel_dilation = np.ones((70,70), np.uint8)
+        opening_dilation = cv2.dilate(opening, kernel_dilation, iterations = 1)
+        result = cv2.bitwise_and(opening_dilation, mask_tgi)
+        return result
 
     def create_map(self):
         ''' создаём карту и сохраняем объект карты как об приватное поле  '''
@@ -381,7 +437,7 @@ class WheatDetectionSystem():
         self, dir,
         d_images_grid, d_images_overlay,
         image_index, d_lat, d_long, grid_size_m, grid_size_px,
-        is_OK, yaw, do_calc_overlay_dict=False
+        is_OK, yaw_deg, do_calc_overlay_dict=False
     ):
         ''' Этапы:
         1. считываем оригинальное изображение
@@ -399,24 +455,32 @@ class WheatDetectionSystem():
         img_lat_max = tmp[0].max()
         img_long_min = tmp[1].min()
         img_long_max = tmp[1].max()
+        print(img_lat_min, img_lat_max, img_long_min, img_long_max)
         img_lat_m = convert_lat_to_meters(img_lat_max - img_lat_min)
         img_long_m = convert_long_to_meters(img_long_max - img_long_min, self.latitude)
+        if img_lat_m == 0 or img_long_m == 0:
+            print('[-] одна из сторон равна 0')
+            return d_images_grid, d_images_overlay
 
         i_min = int((img_lat_min  - self.lat_min) / d_lat)
         j_min = int((img_long_min - self.long_min) / d_long)
         i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
         j_max = int((img_long_max - self.long_min) / d_long) + 1
 
-        filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
-        filenames = sorted(map(os.path.basename, filenames))
-        path_src = f'{self.path_field_day}/{dir}/{filenames[image_index]}'
+        # filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
+        # filenames = sorted(map(os.path.basename, filenames))
+        image_name = self.filenames[image_index]
+        image_basename = os.path.splitext(image_name)[0]
+        dir_extention = os.path.splitext(glob.glob(f'{self.path_field_day}/{dir}/*')[0])[1]
+        path_src = f'{self.path_field_day}/{dir}/{image_basename}{dir_extention}'
         image_src = cv2.imread(path_src, 0)
+        print(image_name, dir_extention, path_src)
         # image_src[:,:100] = 255
         # image_src[:,-100:] = 255
         # image_src[:100,:] = 255
         # image_src[-100:,:] = 255
 
-        img_rotated = rotate_image(image_src, -yaw)
+        img_rotated = rotate_image(image_src, -yaw_deg)
         img_rotated = img_rotated[::-1] # чтобы координатные оси совпадали
         h, w = img_rotated.shape[:2]
 
@@ -451,6 +515,7 @@ class WheatDetectionSystem():
                 w1 = int(float(w) * (j - j_min + 1) / (j_max - j_min))
                 img_crop = new_image[h0:h1, w0:w1]
                 img_crop = cv2.resize(img_crop, (grid_size_px, grid_size_px))
+                # d_images_grid[i,j] += np.array(img_crop / 255, np.uint8)
                 d_images_grid[i,j] += img_crop
 
         if do_calc_overlay_dict == False:
@@ -458,7 +523,7 @@ class WheatDetectionSystem():
 
         # рассчитываем границу
         mask = np.ones(image_src.shape, np.uint8)
-        img_overlay = rotate_image(mask, -yaw)
+        img_overlay = rotate_image(mask, -yaw_deg)
         img_overlay = img_overlay[::-1] # чтобы координатные оси совпадали
         img_overlay = cv2.copyMakeBorder(
             img_overlay,
@@ -507,9 +572,12 @@ class WheatDetectionSystem():
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
                     d[i,j].append(index)
-                    d_images_grid[i,j] = np.zeros((grid_size_px, grid_size_px), np.int16)
+                    d_images_grid[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint16)
                     d_images_overlay[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint8)
-
+        
+        bytes_to_allocate = (len(list(d_images_grid.keys())) * grid_size_px * grid_size_px * 3)
+        gigabytes_to_allocate = bytes_to_allocate / 10**9
+        print(f'[+] выделил {gigabytes_to_allocate:.2f} Гб памяти')
         tmp = np.array(list(d.keys())).T
         i_max = tmp[0].max() + 1
         j_max = tmp[1].max() + 1
@@ -521,11 +589,11 @@ class WheatDetectionSystem():
         for index in range(len(self.filenames)):
             print(' '*80+f'\r{index} / {len(self.filenames)}', end='\r')
             data = self.df_metadata.loc[index]
-            yaw = data['gimbal_yaw_deg']
+            yaw_deg = data['gimbal_yaw_deg']
             d_images_grid, d_images_overlay = self._handle_image(
                 dir, d_images_grid, d_images_overlay,
                 index, d_lat, d_long, grid_size_m, grid_size_px,
-                True, yaw, True)
+                True, yaw_deg, True)
 
         try_to_make_dir(subdir)
         for i,j in d.keys():
@@ -621,42 +689,6 @@ class WheatDetectionSystem():
         f.write('\n</Folder>\n</Document></kml>')
         f.close()
 
-    def draw_masks(self):
-        ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
-        dirs = glob.glob(f'{self.path_field_day}/grid*')
-        dirs = sorted(map(os.path.basename, dirs))
-        for dir in dirs:
-            _, type, grid_size_m = dir.split('_')
-            grid_size_m = float(grid_size_m)
-            feature_group_grid = folium.map.FeatureGroup(
-                name=f'сетка {type} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
-                show=False
-            )
-
-            d_lat = convert_meters_to_lat(grid_size_m)
-            d_long = convert_meters_to_long(grid_size_m, self.latitude)
-
-            filenames = glob.glob(f'{self.path_field_day}/{dir}/*.png')
-            filenames = sorted(map(os.path.basename, filenames))
-            for filename in filenames:
-                i, j = filename[:-4].split('_') # i_j.png
-                i = int(i)
-                j = int(j)
-                bounds = [
-                    [self.lat_min + i*d_lat, self.long_min + j*d_long],
-                    [self.lat_min + (i+1)*d_lat, self.long_min + (j+1)*d_long],
-                ]
-                folium.raster_layers.ImageOverlay(
-                    name="Инструмент для разметки делянок",
-                    image=f'{self.path_field_day}/{dir}/{filename}',
-                    bounds=bounds,
-                    opacity=1.0,
-                    control=False,
-                    zindex=1,
-                ).add_to(feature_group_grid)
-
-            self.layers.append(feature_group_grid)
-
     def _create_tiles(self, tile_type):
         ''' @brief собирает плитку 200x200 в большие изображения и сжимает до 1000x1000 '''
         try_to_make_dir(f'{self.path_field_day}/tiles_{tile_type}')
@@ -738,18 +770,6 @@ class WheatDetectionSystem():
             ).add_to(feature_group_grid)
 
         self.layers.append(feature_group_grid)
-
-
-    def _rotate_and_save(self, path_src, path_mod, yaw, max_image_size, do_rewrite, is_OK):
-        if not os.path.exists(path_mod) or do_rewrite and (is_OK or self.do_show_uncorrect):
-            image = cv2.imread(path_src)
-            h, w, _ = image.shape
-            image_src = cv2.resize(image, (max_image_size, int(float(max_image_size*h)/w)))
-            image = rotate_image(image_src, -yaw)
-            trans_mask = image[:,:,2] == 0
-            new_image = cv2.cvtColor(image, cv2.COLOR_RGB2RGBA)
-            new_image[trans_mask] = [0,0,0,0]
-            cv2.imwrite(path_mod, new_image)
 
     def _read_coords_and_p(self, df, i):
         ''' @brief читаем координаты и вероятности колосьев \n return coords_and_p[lat, long, p] '''
@@ -1180,95 +1200,6 @@ def calc_adjacency_list(image_borders):
         adjacent_list.append(l)
     return adjacent_list
 
-
-# 1. парсим данные через exiftool и библиотеку exif
-# 2. проверяем корректность протокола
-# 3. рассчитываем координаты области под дроном
-# 4. сохраняем всё в 1 файл и возвращаем его
-def handle_metadata(filenames, path_field_day, path_log_metadata):
-    # формат полученного датафрейма
-    # name           is_ok   W    H     lat     long    height   yaw   pitch    roll     border
-    # Image_23.jpg   True    5    3    12.34    12.34    2.7     120    -90     0.0   [[], [], [], []]
-    # Image_24.jpg   False   12   7    45.67    45.67    6.0     130    -60     0.0   [[], [], [], []]
-    # ...
-    src_files = []
-    for datatype in ['[jJ][pP][gG]', '[jJ][pP][eE][gG]', '[pP][nN][gG]']:
-        files = glob.glob(f'{path_field_day}/src/*.{datatype}')
-        src_files += sorted(map(os.path.basename, files))
-    src_file_count = len(src_files) 
-    tmp_file_count = len(os.listdir(f'{path_field_day}/tmp'))
-    print(src_file_count, tmp_file_count)
-
-    if src_file_count != tmp_file_count:
-        try:
-            for filename in filenames:
-                path_img = f'{path_field_day}/src/{filename}'
-                path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
-                command = os.path.join('exiftool-12.34', f'exiftool -csv {path_img} > {path_csv}')
-                os.system(command)
-                df = pd.read_csv(path_csv, header=None).T
-                df.to_csv(path_csv, header=False, index=False)
-        except:
-            print('[-] число файлов в src и tmp не совпало')
-    else:
-        print('[+] число файлов совпало')
-            
-    try:
-        df_metadata = pd.DataFrame(columns=[
-            'name',
-            'is_OK',
-            'width_m', 'height_m',
-            'latitude', 'longtitude', 'flight_altitude_m',
-            'gimbal_yaw_deg', 'gimbal_pitch_deg', 'gimbal_roll_deg',
-            'flight_yaw_deg', 'flight_pitch_deg', 'flight_roll_deg',
-            'border',
-        ])
-           
-        for filename in filenames:
-            path_img = f'{path_field_day}/src/{filename}'
-            path_csv = f'{path_field_day}/tmp/{filename[:-4]}.csv'
-            with open(path_img, 'rb') as image_file:
-                my_image = Image(image_file)
-                latitude = convert_to_decimal(*my_image.gps_latitude)
-                longtitude = convert_to_decimal(*my_image.gps_longitude)
-            df = pd.read_csv(path_csv, index_col=0).T
-            width_px            = float(df['ExifImageWidth'][0])
-            height_px           = float(df['ExifImageHeight'][0])
-            gimbal_yaw_deg      = float(df['GimbalYawDegree'][0])
-            gimbal_pitch_deg    = float(df['GimbalPitchDegree'][0])
-            gimbal_roll_deg     = float(df['GimbalRollDegree'][0])
-            flight_yaw_deg      = float(df['FlightYawDegree'][0])
-            flight_pitch_deg    = float(df['FlightPitchDegree'][0])
-            flight_roll_deg     = float(df['FlightRollDegree'][0])
-            flight_altitude_m   = float(df['RelativeAltitude'][0])
-            fov_deg             = float(df['FOV'][0].split()[0])
-            
-            wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
-            is_OK = (len(wrong_parameters) == 0)
-            width_m, height_m = calc_image_size(flight_altitude_m, fov_deg, width_px, height_px)
-            border = calc_image_border(latitude, longtitude, width_m, height_m, gimbal_yaw_deg)
-            df_metadata = df_metadata.append({
-                'name':                 filename,
-                'is_OK':                str(is_OK),
-                'width_m':              width_m,
-                'height_m':             height_m,
-                'latitude':             latitude,
-                'longtitude':           longtitude,
-                'flight_altitude_m':    flight_altitude_m,
-                'gimbal_yaw_deg':       gimbal_yaw_deg,
-                'gimbal_pitch_deg':     gimbal_pitch_deg,
-                'gimbal_roll_deg':      gimbal_roll_deg,
-                'flight_yaw_deg':       flight_yaw_deg,
-                'flight_pitch_deg':     flight_pitch_deg,
-                'flight_roll_deg':      flight_roll_deg,
-                'border':               border
-            }, ignore_index=True)
-       
-        df_metadata = df_metadata.sort_values(by=['name'])
-        df_metadata.to_csv(path_log_metadata, index=False)
-
-    except:
-        print('[-] датафрейм не сформирован')
 
 def calc_hex_color(value):
     ''' @brief отображает значение [0,1] в цвет [серый, зелёный]
