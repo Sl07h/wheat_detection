@@ -36,7 +36,7 @@ class WheatDetectionSystem():
         self.path_field_day    = f'data/{field}/{attempt}'
         self.prefix_string     = f'data/{field}/{attempt}/log/{field}.{attempt}'
         self.path_log_metadata = f'{self.prefix_string}.metadata.csv'
-        self.path_to_geojson   = f'data/{field}/{field}.geojson'
+        self.path_to_geojson   = f'data/{field}/wheat_plots.geojson'
         self.path_to_map       = f'maps/{field}.{attempt}.html'
         self.do_show_uncorrect = do_show_uncorrect
 
@@ -55,11 +55,11 @@ class WheatDetectionSystem():
         self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
         print(f'[+] считал файл: {self.path_log_metadata}')
 
-        self.filenames = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['name']]
-        self.filenames = list(self.filenames['name'])
+        df = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['name']]
+        self.images = (list(df.T.columns)) # индексы изображений снятых по протоколу
         self.image_borders = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['border']]
         self.image_borders = list(self.image_borders['border'])
-        print(f'[+] отфильтровал нарушения протокола, некорректны: {self.df_metadata.shape[0] - len(self.filenames)} файлов')
+        print(f'[+] отфильтровал нарушения протокола, некорректны: {self.df_metadata.shape[0] - len(self.images)} файлов')
 
         self.latitude = float(self.df_metadata['latitude'][0])
         self.longtitude = float(self.df_metadata['longtitude'][0])
@@ -186,17 +186,16 @@ class WheatDetectionSystem():
     def perform_calculations(self):
         ''' считаем колосья в прямоугольниках карты плотности и делянках '''
         self.adjacent_frames = calc_adjacency_list(self.image_borders)
-        print('Нашёл пересечение кадров')
-        n = len(self.filenames)
-        for i in range(n):
-            print(f'{i} / {n}')
+        print(self.adjacent_frames)
+        print('[+] нашёл пересечение кадров')
+        for i in self.images:
+            print(f'{i} / {len(self.images)}', end='\r')
             self.wheat_ears += self._calc_wheat_intersections(i)
         self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
 
     def draw_wheat_plots(self):
         ''' отрисовка числа колосьев на каждой делянке '''
-        feature_group_choropleth = folium.FeatureGroup(
-            name='wheat plots', show=True)
+        feature_group_choropleth = folium.FeatureGroup(name='wheat plots', show=False)
         df = pd.DataFrame(columns=['сорт', 'количество колосьев'])
         with open(self.path_to_geojson) as f:
             data = json.load(f)
@@ -240,15 +239,17 @@ class WheatDetectionSystem():
         feature_group_protocol = folium.FeatureGroup(name='protocol', show=True)
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
-            filename = line['name']
-            flight_altitude_m = line['flight_altitude_m']
-            gimbal_yaw_deg   = line['gimbal_yaw_deg']
-            gimbal_pitch_deg = line['gimbal_pitch_deg']
-            gimbal_roll_deg  = line['gimbal_roll_deg']
-            flight_yaw_deg   = line['flight_yaw_deg']
-            flight_pitch_deg = line['flight_pitch_deg']
-            flight_roll_deg  = line['flight_roll_deg']
-            border = line['border']
+            filename            = line['name']
+            width_m             = line['width_m']
+            height_m            = line['height_m']
+            flight_altitude_m   = line['flight_altitude_m']
+            gimbal_yaw_deg      = line['gimbal_yaw_deg']
+            gimbal_pitch_deg    = line['gimbal_pitch_deg']
+            gimbal_roll_deg     = line['gimbal_roll_deg']
+            flight_yaw_deg      = line['flight_yaw_deg']
+            flight_pitch_deg    = line['flight_pitch_deg']
+            flight_roll_deg     = line['flight_roll_deg']
+            border              = line['border']
             wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
 
 
@@ -271,18 +272,18 @@ class WheatDetectionSystem():
 
             popup_str = f'''  <table style="width: 100%; vertical-align: bottom;">
             <colgroup>
-            <col span="1" style="width: 30%; vertical-align: top;">
-            <col span="1" style="width: 70%;">
+            <col span="1" style="width: 35%; vertical-align: top;">
+            <col span="1" style="width: 65%;">
             </colgroup>
 
             <tr>
                 <td>{popup_str}</td>
-                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="547" height="308"></td>
+                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="350" height="{400.0*height_m/width_m}"></td>
             </tr>
             </table>'''
 
 
-            iframe = folium.IFrame(html=popup_str, width=800, height=350)
+            iframe = folium.IFrame(html=popup_str, width=570, height=250)
             folium.PolyLine(border, color=color_polyline) \
                   .add_child(folium.Popup(iframe)) \
                   .add_to(feature_group_protocol)
@@ -301,13 +302,12 @@ class WheatDetectionSystem():
             print(f'[+] {self.path_field_day}/tgi уже существует')
             return None
         try_to_make_dir(f'{self.path_field_day}/tgi')
-        # filenames = glob.glob(f'{self.path_field_day}/src/*')
-        # filenames = sorted(map(os.path.basename, filenames))
-        for filename in self.filenames:
-            path_img = f'{self.path_field_day}/src/{filename}'
+        for index in self.images:
+            filename = self.df_metadata.loc[index]['name']
+            filename, ext = os.path.splitext(filename)
+            path_img = f'{self.path_field_day}/src/{filename}{ext}'
             img = cv2.imread(path_img)
             result = self._calc_tgi_cv2(img)
-            filename=os.path.splitext(filename)[0]
             cv2.imwrite(f'{self.path_field_day}/tgi/{filename}.png', result)
         print('[+] индекс tgi рассчитан')
 
@@ -361,7 +361,6 @@ class WheatDetectionSystem():
         ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
         feature_group_grid = folium.map.FeatureGroup(
             name=f'grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
-            # overlay=False,
             show=False
         )
 
@@ -450,12 +449,11 @@ class WheatDetectionSystem():
         if not (is_OK or self.do_show_uncorrect):
             return d_images_grid, d_images_overlay
 
-        tmp = np.array(self.image_borders[image_index]).T
+        tmp = np.array(self.df_metadata.loc[image_index]['border']).T
         img_lat_min = tmp[0].min()
         img_lat_max = tmp[0].max()
         img_long_min = tmp[1].min()
         img_long_max = tmp[1].max()
-        print(img_lat_min, img_lat_max, img_long_min, img_long_max)
         img_lat_m = convert_lat_to_meters(img_lat_max - img_lat_min)
         img_long_m = convert_long_to_meters(img_long_max - img_long_min, self.latitude)
         if img_lat_m == 0 or img_long_m == 0:
@@ -467,14 +465,11 @@ class WheatDetectionSystem():
         i_max = int((img_lat_max  - self.lat_min) / d_lat) + 1
         j_max = int((img_long_max - self.long_min) / d_long) + 1
 
-        # filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
-        # filenames = sorted(map(os.path.basename, filenames))
-        image_name = self.filenames[image_index]
+        image_name = self.df_metadata.loc[image_index]['name']
         image_basename = os.path.splitext(image_name)[0]
         dir_extention = os.path.splitext(glob.glob(f'{self.path_field_day}/{dir}/*')[0])[1]
         path_src = f'{self.path_field_day}/{dir}/{image_basename}{dir_extention}'
         image_src = cv2.imread(path_src, 0)
-        print(image_name, dir_extention, path_src)
         # image_src[:,:100] = 255
         # image_src[:,-100:] = 255
         # image_src[:100,:] = 255
@@ -494,9 +489,6 @@ class WheatDetectionSystem():
         pad_l_px =  int(w * pad_l_ratio * grid_size_m / img_long_m)
         pad_r_px =  int(w * pad_r_ratio * grid_size_m / img_long_m)
         pad_t_px, pad_b_px = pad_b_px, pad_t_px # чтобы координатные оси совпадали
-
-        # print(f'{pad_b_ratio:.1f} {pad_t_ratio:.1f}    {pad_l_ratio:.1f} {pad_r_ratio:.1f}')
-        # print(f'{pad_b_px:.1f} {pad_t_px:.1f}    {pad_l_px:.1f} {pad_r_px:.1f}')
 
         new_image = cv2.copyMakeBorder(
             img_rotated,
@@ -559,8 +551,8 @@ class WheatDetectionSystem():
         d = defaultdict(list)
         d_images_grid = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.int16))
         d_images_overlay = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.uint8))
-        for index in range(len(self.filenames)):
-            tmp = np.array(self.image_borders[index]).T
+        for image_index in self.images:
+            tmp = np.array(self.df_metadata.loc[image_index]['border']).T
             img_lat_min = tmp[0].min()
             img_lat_max = tmp[0].max()
             img_long_min = tmp[1].min()
@@ -571,7 +563,7 @@ class WheatDetectionSystem():
             j_max = int((img_long_max - self.long_min) / d_long) + 1
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
-                    d[i,j].append(index)
+                    d[i,j].append(image_index)
                     d_images_grid[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint16)
                     d_images_overlay[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint8)
         
@@ -586,13 +578,12 @@ class WheatDetectionSystem():
         self.grid_lat_max = self.grid_lat_min + i_max * d_lat
         self.grid_long_max = self.grid_long_min + j_max * d_long
 
-        for index in range(len(self.filenames)):
-            print(' '*80+f'\r{index} / {len(self.filenames)}', end='\r')
-            data = self.df_metadata.loc[index]
-            yaw_deg = data['gimbal_yaw_deg']
+        for image_index in self.images:
+            print(' '*80+f'\r{image_index} / {len(self.images)}', end='\r')
+            yaw_deg = self.df_metadata.loc[image_index]['gimbal_yaw_deg']
             d_images_grid, d_images_overlay = self._handle_image(
                 dir, d_images_grid, d_images_overlay,
-                index, d_lat, d_long, grid_size_m, grid_size_px,
+                image_index, d_lat, d_long, grid_size_m, grid_size_px,
                 True, yaw_deg, True)
 
         try_to_make_dir(subdir)
@@ -626,8 +617,8 @@ class WheatDetectionSystem():
         d_lat = convert_meters_to_lat(grid_size_m)
         d_long = convert_meters_to_long(grid_size_m, self.latitude)
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'{dir} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
-            show=True
+            name=f'grass coverage {dir} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            show=False
         )
         # divide count of objects by region area
         for i, j, value in grid:
@@ -768,11 +759,11 @@ class WheatDetectionSystem():
                 control=False,
                 zindex=1,
             ).add_to(feature_group_grid)
-
-        self.layers.append(feature_group_grid)
+        feature_group_grid.add_to(self.m)
 
     def _read_coords_and_p(self, df, i):
-        ''' @brief читаем координаты и вероятности колосьев \n return coords_and_p[lat, long, p] '''
+        ''' @brief читаем координаты и вероятности колосьев
+        @return coords_and_p[lat, long, p] '''
         coords_and_p = []
         l = df.iloc[i].values[1]
         try: # если ничего не обнаружили
@@ -806,13 +797,15 @@ class WheatDetectionSystem():
         cos_a = cos(yaw_rad)
         width_m /= 2
         height_m /= 2
-        tmp_im = cv2.imread(f'{self.path_field_day}/src/{self.filenames[0]}')
+        filename = self.df_metadata.loc[self.images[0]]['name'] # имя первого корректного файла
+        tmp_im = cv2.imread(f'{self.path_field_day}/src/{filename}')
         height_px, width_px, _ = tmp_im.shape
         height_px /= 2
         width_px /= 2
 
         if is_OK or self.do_show_uncorrect:
             coords_and_p = self._read_coords_and_p(self.df_bboxes, df_i)
+            print(df_i)
             for i in range(len(coords_and_p)):
                 x, y, p = coords_and_p[i]
                 x = width_m *  (x - width_px) / width_px
@@ -887,7 +880,8 @@ class WheatDetectionSystem():
         stride_size = kernel_size // 2
         batch_size = 1
         num_classes = 2
-        path = f'{self.path_field_day}/src/{self.filenames[0]}'
+        filename = self.df_metadata.loc[self.images[0]]['name'] # имя первого корректного файла
+        path = f'{self.path_field_day}/src/{filename}'
         H, W, _ = cv2.imread(path).shape
 
         device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -918,12 +912,11 @@ class WheatDetectionSystem():
         )
 
         image_i = 0
-        n = len(self.filenames)
         for batch_images, batch_image_names in test_data_loader:
             image = batch_images[0]
             image_name = batch_image_names[0]
             _, H, W = image.shape
-            print(f'\n{image_i} / {n}  Изображение {image_name}: {W}x{H}')
+            print(f'\n{image_i} / {len(self.images)}  Изображение {image_name}: {W}x{H}')
             image_i += 1
             x = batch_images
             kc, kh, kw = 3, kernel_size, kernel_size
@@ -1028,7 +1021,7 @@ def rotate_image(image, angle):
 
 def rotate_image(image, angle_deg):
     h, w = image.shape[:2]
-    image_center = (w / 2.0, h / 2)
+    image_center = (w / 2, h / 2)
 
     rot = cv2.getRotationMatrix2D(image_center, angle_deg, 1)
 
