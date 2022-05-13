@@ -42,6 +42,8 @@ class WheatDetectionSystem():
 
         # self.max_image_size = 150
         # self.max_mask_size = 5472
+        self.RAM_limit_gb = 4.5
+        self.yaw_str = 'flight_yaw_deg'
         self.wheat_ears = []
         self.layers = []
         self.colormaps = []
@@ -132,7 +134,10 @@ class WheatDetectionSystem():
                 flight_roll_deg     = float(df['FlightRollDegree'][0])
                 flight_altitude_m   = float(df['RelativeAltitude'][0])
                 fov_deg             = float(df['FOV'][0].split()[0])
-                yaw_deg             = gimbal_yaw_deg
+                
+                yaw_deg = gimbal_yaw_deg
+                if self.yaw_str == 'flight_yaw_deg':
+                    yaw_deg = flight_yaw_deg
 
                 wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
                 is_OK = (len(wrong_parameters) == 0)
@@ -237,6 +242,7 @@ class WheatDetectionSystem():
     def draw_protocol(self):
         ''' отображаем корректность протокола сьёмки изображений '''
         feature_group_protocol = folium.FeatureGroup(name='protocol', show=True)
+        img_width, img_height = 350, 233
         for i in range(self.df_metadata.shape[0]):
             line = self.df_metadata.loc[i]
             filename            = line['name']
@@ -251,7 +257,6 @@ class WheatDetectionSystem():
             flight_roll_deg     = line['flight_roll_deg']
             border              = line['border']
             wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
-
 
             popup_str = f'<b>filename: {filename}</b><br>' + \
                         f'gimbal_yaw_deg: {gimbal_yaw_deg}º<br>' + \
@@ -270,6 +275,8 @@ class WheatDetectionSystem():
                 for wrong_parameter in wrong_parameters:
                     popup_str += '<br>' + wrong_parameter
 
+            if np.isnan(width_m) or np.isnan(height_m):
+                img_height = int(350.0*height_m/width_m)
             popup_str = f'''  <table style="width: 100%; vertical-align: bottom;">
             <colgroup>
             <col span="1" style="width: 35%; vertical-align: top;">
@@ -278,12 +285,11 @@ class WheatDetectionSystem():
 
             <tr>
                 <td>{popup_str}</td>
-                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="350" height="{400.0*height_m/width_m}"></td>
+                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="{img_width}" height="{img_height}"></td>
             </tr>
             </table>'''
 
-
-            iframe = folium.IFrame(html=popup_str, width=570, height=250)
+            iframe = folium.IFrame(html=popup_str, width=600, height=270)
             folium.PolyLine(border, color=color_polyline) \
                   .add_child(folium.Popup(iframe)) \
                   .add_to(feature_group_protocol)
@@ -293,7 +299,7 @@ class WheatDetectionSystem():
         for size in size_list:
             self._draw_grid(size)
     
-    def create_mask(self, index_type = 'tgi'):
+    def _create_mask(self, index_type = 'tgi'):
         if index_type == 'tgi':
             self._calc_tgi()
 
@@ -507,8 +513,8 @@ class WheatDetectionSystem():
                 w1 = int(float(w) * (j - j_min + 1) / (j_max - j_min))
                 img_crop = new_image[h0:h1, w0:w1]
                 img_crop = cv2.resize(img_crop, (grid_size_px, grid_size_px))
-                # d_images_grid[i,j] += np.array(img_crop / 255, np.uint8)
-                d_images_grid[i,j] += img_crop
+                # d_images_grid[i, j] += np.array(img_crop / 255, np.uint8)
+                d_images_grid[i, j] += img_crop
 
         if do_calc_overlay_dict == False:
             return d_images_grid, d_images_overlay
@@ -532,11 +538,11 @@ class WheatDetectionSystem():
                 w1 = int(float(w) * (j - j_min + 1) / (j_max - j_min))
                 img_crop = img_overlay[h0:h1, w0:w1]
                 img_crop = cv2.resize(img_crop, (grid_size_px, grid_size_px))
-                d_images_overlay[i,j] += img_crop
+                d_images_overlay[i, j] += img_crop
 
         return d_images_grid, d_images_overlay
 
-    def _create_grid_from_images(self, dir, grid_size_m, grid_size_px = 200):
+    def _create_grid_from_images(self, dir, grid_size_m, grid_size_px = 50):
         ''' @brief строим сетку изображений из диретории dir
         @param dir строка папки [src/ndvi/etc.]
         @param grid_size_m размер кусочка плитки в метрах
@@ -547,10 +553,9 @@ class WheatDetectionSystem():
             return None
         d_lat = convert_meters_to_lat(grid_size_m)
         d_long = convert_meters_to_long(grid_size_m, self.latitude)
-        # запоминаем какие изображения попадают в каждый элемент сетки
-        d = defaultdict(list)
-        d_images_grid = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.int16))
-        d_images_overlay = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.uint8))
+        
+        # рассчитываем в какие элементы сетки попадут изображения
+        grid_cells_list = []
         for image_index in self.images:
             tmp = np.array(self.df_metadata.loc[image_index]['border']).T
             img_lat_min = tmp[0].min()
@@ -563,14 +568,24 @@ class WheatDetectionSystem():
             j_max = int((img_long_max - self.long_min) / d_long) + 1
             for i in range(i_min, i_max):
                 for j in range(j_min, j_max):
-                    d[i,j].append(image_index)
-                    d_images_grid[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint16)
-                    d_images_overlay[i,j] = np.zeros((grid_size_px, grid_size_px), np.uint8)
+                    grid_cells_list += [[i, j]]
         
-        bytes_to_allocate = (len(list(d_images_grid.keys())) * grid_size_px * grid_size_px * 3)
-        gigabytes_to_allocate = bytes_to_allocate / 10**9
-        print(f'[+] выделил {gigabytes_to_allocate:.2f} Гб памяти')
-        tmp = np.array(list(d.keys())).T
+        grid_cells_list = sorted(grid_cells_list)
+        bytes_to_allocate = (len(grid_cells_list) * grid_size_px * grid_size_px * 3)
+        RAM_to_allocate_gb = bytes_to_allocate / 10**9
+        if RAM_to_allocate_gb > self.RAM_limit_gb:
+            raise Exception(f'[-] попытка выделить {RAM_to_allocate_gb} Гб памяти')
+        print(f'[+] выделил {RAM_to_allocate_gb:.2f} Гб памяти')
+
+        d_images_grid = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.int16))
+        d_images_overlay = defaultdict(lambda: np.zeros((grid_size_px, grid_size_px), np.uint8))
+        for i_j in grid_cells_list:
+            i, j = i_j
+            d_images_grid[i, j]    = np.zeros((grid_size_px, grid_size_px), np.uint16)
+            d_images_overlay[i, j] = np.zeros((grid_size_px, grid_size_px), np.uint8)
+        
+        
+        tmp = np.array(grid_cells_list).T
         i_max = tmp[0].max() + 1
         j_max = tmp[1].max() + 1
         self.grid_lat_min = self.lat_min
@@ -580,16 +595,16 @@ class WheatDetectionSystem():
 
         for image_index in self.images:
             print(' '*80+f'\r{image_index} / {len(self.images)}', end='\r')
-            yaw_deg = self.df_metadata.loc[image_index]['gimbal_yaw_deg']
+            yaw_deg = self.df_metadata.loc[image_index][self.yaw_str]
             d_images_grid, d_images_overlay = self._handle_image(
                 dir, d_images_grid, d_images_overlay,
                 image_index, d_lat, d_long, grid_size_m, grid_size_px,
                 True, yaw_deg, True)
 
         try_to_make_dir(subdir)
-        for i,j in d.keys():
-            a = np.array(d_images_grid[i,j], np.float32)
-            b = np.array(d_images_overlay[i,j], np.float32)
+        for i, j in grid_cells_list:
+            a = np.array(d_images_grid[i, j], np.float32)
+            b = np.array(d_images_overlay[i, j], np.float32)
             # нормируем, пропуская пиксели в которых нет изображений и считаем индекс
             division = np.divide(a, b, out=np.zeros_like(a), where=b!=0)
             cv2.imwrite(f'{subdir}/{i}_{j}.png', division[::-1])
@@ -727,7 +742,13 @@ class WheatDetectionSystem():
             tile = cv2.resize(tile, (1500, 1500))
             cv2.imwrite(f'{self.path_field_day}/tiles_{tile_type}/{i_tile}_{j_tile}.webp', tile)
 
-    def draw_tiles(self, tile_type):
+    def draw_tiles(self, tile_type_list):
+        for tile_type in tile_type_list:
+            if tile_type != 'src':
+                self._create_mask(tile_type)
+            self._draw_tiles(tile_type)
+        
+    def _draw_tiles(self, tile_type):
         ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
         self._create_tiles(tile_type)
         grid_size_m = 0.2
@@ -790,7 +811,7 @@ class WheatDetectionSystem():
         height_m    = data['height_m']
         latitude    = data['latitude']
         longtitude  = data['longtitude']
-        yaw_deg     = data['gimbal_yaw_deg']
+        yaw_deg     = data[self.yaw_str]
 
         yaw_rad = radians(-yaw_deg)
         sin_a = sin(yaw_rad)
