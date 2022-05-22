@@ -1,3 +1,4 @@
+from typing import List
 import folium
 import glob
 import json
@@ -26,7 +27,15 @@ from effdet.bench import DetBenchPredict
 
 
 class WheatDetectionSystem():
-    # public methods
+    '''
+    ## Система компьютерного зрения для анализа количественных характеристик колосьев
+    ### Рекомендуемый функционал:
+    * draw_protocol() - отрисовка протокола
+    * draw_wheat_plots(model_name, kernel_size) - отрисовка протокола
+    * draw_wheat_grids(model_name, kernel_size) - построение сеток плотности
+    * draw_tiles(dir_list) - отрисовка крупной плиткой
+    * draw_vegetation_cover(method_list) - построение сеток покрытия растительносью
+    '''
     def __init__(
         self,
         field: str,                     # 'Field_2021'
@@ -36,17 +45,16 @@ class WheatDetectionSystem():
         self.path_field_day    = f'data/{field}/{attempt}'
         self.prefix_string     = f'data/{field}/{attempt}/log/{field}.{attempt}'
         self.path_log_metadata = f'{self.prefix_string}.metadata.csv'
-        self.path_to_geojson   = f'data/{field}/wheat_plots.geojson'
+        self.path_to_geojson   = f'data/{field}/{field}.geojson'
         self.path_to_map       = f'maps/{field}.{attempt}.html'
         self.do_show_uncorrect = do_show_uncorrect
 
-        # self.max_image_size = 150
-        # self.max_mask_size = 5472
         self.RAM_limit_gb = 4.5
         self.yaw_str = 'flight_yaw_deg'
-        self.wheat_ears = []
-        self.layers = []
+        self.layers    = []
         self.colormaps = []
+        self.grid_size_m = 0.2
+        self.unite_every_k_images = 25
 
         # проверка или создание нужных директорий и файла df_metadata
         make_dirs(self.path_field_day)        
@@ -54,27 +62,272 @@ class WheatDetectionSystem():
             self._create_df_metadata()
 
         self.df_metadata = pd.read_csv(self.path_log_metadata)
+        # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
         self.df_metadata['border'] = self.df_metadata['border'].apply(lambda x: json.loads(x))
         print(f'[+] считал файл: {self.path_log_metadata}')
 
         df = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['name']]
-        self.images = (list(df.T.columns)) # индексы изображений снятых по протоколу
-        self.image_borders = self.df_metadata.loc[self.df_metadata['is_OK']==True, ['border']]
-        self.image_borders = list(self.image_borders['border'])
+        self.images = list(df.T.columns) # индексы изображений снятых по протоколу
+        image_borders = np.array(self.df_metadata['border'].values)[self.images]
+        image_borders = [x for x in image_borders]
+        image_borders = np.array(image_borders)
         print(f'[+] отфильтровал нарушения протокола, некорректны: {self.df_metadata.shape[0] - len(self.images)} файлов')
 
-        self.latitude = float(self.df_metadata['latitude'][0])
-        self.longtitude = float(self.df_metadata['longtitude'][0])
-        # https://stackoverflow.com/questions/13331698/how-to-apply-a-function-to-two-columns-of-pandas-dataframe
-        lat = np.array(self.image_borders).flatten()[::2]
-        long = np.array(self.image_borders).flatten()[1::2]
+        lat  = image_borders.flatten()[::2]
+        long = image_borders.flatten()[1::2]
         self.lat_min = lat.min()
         self.lat_max = lat.max()
         self.long_min = long.min()
         self.long_max = long.max()
+        self.latitude   = lat.mean()
+        self.longtitude = long.mean()
+
+    def create_map(self):
+        ''' @brief создаём карту и сохраняем объект карты как об приватное поле  '''
+        self.m = folium.Map(
+            [self.latitude, self.longtitude],
+            tiles=None,
+            prefer_canvas=True,
+            control_scale=True,
+            zoom_start=21,
+            zoom_control=False
+        )
+        base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
+        folium.TileLayer(tiles='OpenStreetMap', max_zoom=25).add_to(base_map)
+        base_map.add_to(self.m)
+
+    def draw_protocol(self):
+        ''' @brief отображаем корректность протокола сьёмки изображений '''
+        feature_group_protocol = folium.FeatureGroup(name='protocol', show=True)
+        img_width, img_height = 350, 233
+        for i in range(self.df_metadata.shape[0]):
+            line = self.df_metadata.loc[i]
+            filename            = line['name']
+            width_m             = line['width_m']
+            height_m            = line['height_m']
+            flight_altitude_m   = line['flight_altitude_m']
+            gimbal_yaw_deg      = line['gimbal_yaw_deg']
+            gimbal_pitch_deg    = line['gimbal_pitch_deg']
+            gimbal_roll_deg     = line['gimbal_roll_deg']
+            flight_yaw_deg      = line['flight_yaw_deg']
+            flight_pitch_deg    = line['flight_pitch_deg']
+            flight_roll_deg     = line['flight_roll_deg']
+            border              = line['border']
+            wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
+
+            popup_str = f'<b>filename: {filename}</b><br>' + \
+                        f'gimbal_yaw_deg: {gimbal_yaw_deg}º<br>' + \
+                        f'gimbal_pitch_deg: {gimbal_pitch_deg}º<br>' + \
+                        f'gimbal_roll_deg: {gimbal_roll_deg}º<br>' + \
+                        f'flight_yaw_deg: {flight_yaw_deg}º<br>' + \
+                        f'flight_pitch_deg: {flight_pitch_deg}º<br>' + \
+                        f'flight_roll_deg: {flight_roll_deg}º<br>' + \
+                        f'flight_altitude_m: {flight_altitude_m}'
+
+            # если протокол нарушен, то меняем цвет на красный и выводим ошибки
+            color_polyline = '#007800'
+            if len(wrong_parameters) > 0:
+                color_polyline = '#780000'
+                popup_str += '<br><br><b>Ошибки:</b>'
+                for wrong_parameter in wrong_parameters:
+                    popup_str += '<br>' + wrong_parameter
+
+            if np.isnan(width_m) or np.isnan(height_m):
+                img_height = int(350.0*height_m/width_m)
+            popup_str = f'''  <table style="width: 100%; vertical-align: bottom;">
+            <colgroup>
+            <col span="1" style="width: 35%; vertical-align: top;">
+            <col span="1" style="width: 65%;">
+            </colgroup>
+
+            <tr>
+                <td>{popup_str}</td>
+                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="{img_width}" height="{img_height}"></td>
+            </tr>
+            </table>'''
+
+            iframe = folium.IFrame(html=folium.Html(popup_str, script=True), width=600, height=270)
+            folium.PolyLine(border, color=color_polyline) \
+                  .add_child(folium.Popup(iframe)) \
+                  .add_to(feature_group_protocol)
+        feature_group_protocol.add_to(self.m)
+
+    def draw_wheat_plots(
+            self,
+            cnn_model: str,                 # 'frcnn'
+            kernel_size: int,               # 512
+        ):
+        ''' @brief отрисовка числа колосьев на каждой делянке
+        @param cnn_model - модель детекции (frcnn или effdet)
+        @param kernel_size - размер сетки при нарезке изображения на плитку и масштабированию к 512x512 
+        '''
+        self.wheat_ears = self._project_wheat_heads_to_coordinates(cnn_model, kernel_size)
+        self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
+
+        feature_group_choropleth = folium.FeatureGroup(name='wheat plots', show=False)
+        df = pd.DataFrame(columns=['сорт', 'количество колосьев'])
+        with open(self.path_to_geojson) as f:
+            data = json.load(f)
+            num_of_polygons = len(data['features'])
+
+            max_p = np.amax(self.ears_in_polygons)
+            for i in range(num_of_polygons):
+                val = self.ears_in_polygons[i] / max_p
+                hex_color = calc_hex_color(val)
+
+                t = np.array(data['features'][i]['geometry']['coordinates'][0])
+                t[:, [0, 1]] = t[:, [1, 0]]
+
+                str_wheat_type = ''
+                try:
+                    str_wheat_type = data['features'][i]['properties']['name']
+                except:
+                    pass
+
+                folium.Polygon(t,
+                               color='#303030',
+                               opacity=0.05,
+                               fill=True,
+                               fill_color=hex_color,
+                               fill_opacity=1.0
+                               )\
+                    .add_child(folium.Tooltip(f'{str_wheat_type}\n{self.ears_in_polygons[i]}')) \
+                    .add_to(feature_group_choropleth)
+                df = df.append(
+                    {'сорт': str_wheat_type, 'количество колосьев': self.ears_in_polygons[i]}, ignore_index=True)
+
+        colormap = folium.LinearColormap(
+            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
+        colormap.caption = 'count of spikes in wheat plots, pcs'
+        self.layers.append(feature_group_choropleth)
+        self.colormaps.append(colormap)
+        path_log_plots  = f'{self.prefix_string}.{cnn_model}.{kernel_size}.result.csv'
+        df.to_csv(path_log_plots)
+
+    def draw_wheat_grid(self, cnn_model: str, kernel_size: int, grid_size_m = 0.2):
+        ''' @brief отрисовываем плотность пшеницы сеткой grid_size_m * grid_size_m 
+        @param cnn_model - модель детекции (frcnn или effdet)
+        @param kernel_size - размер сетки при нарезке изображения на плитку и масштабированию к 512x512 
+        @param grid_size_m - размер сетки в местрах
+        '''
+        self.wheat_ears = self._project_wheat_heads_to_coordinates(cnn_model, kernel_size)
+        feature_group_grid = folium.map.FeatureGroup(
+            name=f'wheat head density. grid: {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            show=False
+        )
+
+        d_lat = convert_meters_to_lat(grid_size_m)
+        d_long = convert_meters_to_long(grid_size_m, self.latitude)
+
+        delta_lat = self.lat_max - self.lat_min
+        delta_long = self.long_max - self.long_min
+        n_lat = int(delta_lat / d_lat)
+        n_long = int(delta_long / d_long)
+
+        wheat_counts = np.zeros((n_lat+1, n_long+1))
+        coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
+        for wheat_ear in self.wheat_ears:
+            _lat, _long, p = wheat_ear
+            i = int((_lat - self.lat_min) / d_lat)
+            j = int((_long - self.long_min) / d_long)
+            wheat_counts[i][j] += p
+
+        max_p = np.amax(wheat_counts)
+
+        max_p /= grid_size_m*grid_size_m
+        lat_cut = grid_size_m * ((delta_lat - n_lat*d_lat) / d_lat)
+        long_cut = grid_size_m * ((delta_long - n_long*d_long) / d_long)
+        for i in range(n_lat):
+            j = n_long
+            wheat_counts[i][j] /= (grid_size_m*lat_cut)
+
+        for j in range(n_long):
+            i = n_lat
+            wheat_counts[i][j] /= (grid_size_m*long_cut)
+
+        wheat_counts[n_lat][n_long] /= (lat_cut*long_cut)
+
+        for i in range(n_lat):
+            for j in range(n_long):
+                if wheat_counts[i][j] > 0:
+                    wheat_counts[i][j] /= (grid_size_m**2)
+
+        # divide count of objects by region area
+        for i in range(n_lat):
+            for j in range(n_long):
+                if wheat_counts[i][j] > 0:
+                    lat_b = self.lat_min + i*d_lat
+                    lat_e = lat_b + d_lat
+                    long_b = self.long_min + j*d_long
+                    long_e = long_b + d_long
+                    coordinates[i][j] = np.array([
+                        [lat_b, long_b],
+                        [lat_b, long_e],
+                        [lat_e, long_e],
+                        [lat_e, long_b]
+                    ])
+                    value = wheat_counts[i][j] / max_p
+                    hex_color = calc_hex_color(value)
+                    folium.Rectangle(coordinates[i][j],
+                                     color='#303030',
+                                     opacity=0.05,
+                                     fill=True,
+                                     fill_color=hex_color,
+                                     fill_opacity=1.0
+                                     )\
+                        .add_child(folium.Tooltip(f'{wheat_counts[i][j]:.2f}')) \
+                        .add_to(feature_group_grid)
+
+        colormap = folium.LinearColormap(
+            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
+        colormap.caption = 'spike density, pcs/m²'
+        self.layers.append(feature_group_grid)
+        self.colormaps.append(colormap)
+    
+    def draw_tiles(self, tile_type_list: List[str]):
+        ''' @brief отрисовываем крупной плиткой 5x5 метров
+        @param tile_type_list - список директорий / методов: src/tgi/...
+        '''
+        for tile_type in tile_type_list:
+            if tile_type != 'src':
+                self._create_mask(tile_type)
+            self._draw_tiles(tile_type)
+
+    def draw_vegetation_cover(
+        self,
+        method_list: List[str],
+        grid_size_m = 0.2,
+        grid_size_px = 100,
+    ):
+        ''' @brief отрисовываем долю площади покрытой растительностью на квадратную сетку grid_size_m * grid_size_m
+        @param method_list - методы (индексы вегетации)
+        @param grid_size_m - размер сетки в метрах
+        @param grid_size_px - размер сетки в пикселях
+        '''
+        for method in method_list:
+            self._draw_vegetation_cover(method, grid_size_m, grid_size_px)
+
+    def save_map(self):
+        ''' @brief соединяем слои, карты цветов и сохраняем карту '''
+        for layer in self.layers:
+            self.m.add_child(layer)
+        for colormap in self.colormaps:
+            self.m.add_child(colormap)
+
+        for layer, colormap in zip(self.layers, self.colormaps):
+            self.m.add_child(BindColormap(layer, colormap))
+
+        export_filename = f'{self.path_field_day.split("/")[1]}.geojson'
+        Draw(position='topright', export=False, filename=export_filename).add_to(self.m)
+        MeasureControl(position='bottomleft', collapsed=False).add_to(self.m)
+        folium.map.LayerControl(position='topleft', collapsed=False).add_to(self.m)
+
+        self.m.save(self.path_to_map)
 
 
-
+    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------       
     def _create_df_metadata(self):
         ''' @brief вытягиваем метаданные в один csv-файл
         1. парсим данные через exiftool и библиотеку exif
@@ -166,138 +419,62 @@ class WheatDetectionSystem():
         except:
             print('[-] датафрейм не сформирован')
 
-
-    def read_bboxes(
+    def _read_bboxes(
         self,
         cnn_model: str,                 # 'frcnn'
         kernel_size: int,               # 512
-        activation_treshold: int = 0.7,  # 0.7
-):
+        activation_treshold: int = 0.7, # 0.7
+    ):
         '''
         1. производим детекцию колосьев (если надо)
         2. считываем файл с диска '''
-
-        self.cnn_model = cnn_model
-        self.kernel_size = int(kernel_size)
         self.activation_treshold = activation_treshold
         self.path_log_bboxes   = f'{self.prefix_string}.{cnn_model}.{kernel_size}.bboxes.csv'
-        self.path_log_plots    = f'{self.prefix_string}.{cnn_model}.{kernel_size}.result.csv'
         if not os.path.exists(self.path_log_bboxes):
-            self._detect_wheat_heads()
-
+            self._detect_wheat_heads(cnn_model, kernel_size)
         self.df_bboxes = pd.read_csv(self.path_log_bboxes)
         print(f'[+] считал файл: {self.path_log_bboxes}')
 
-    def perform_calculations(self):
-        ''' считаем колосья в прямоугольниках карты плотности и делянках '''
-        self.adjacent_frames = calc_adjacency_list(self.image_borders)
-        print(self.adjacent_frames)
+    def _project_wheat_heads_to_coordinates(
+            self,
+            cnn_model: str,                 # 'frcnn'
+            kernel_size: int,               # 512
+        ):
+        ''' @brief отображаем на карту колосья, обнаруженные нейросетью
+        @return wheat_ears [[lat, long, p], ...]         
+        '''
+        path_log_wheat_heads = f'{self.prefix_string}.{cnn_model}.{kernel_size}.wheat_heads.txt'
+        if os.path.exists(path_log_wheat_heads):
+            print(f'[+] {path_log_wheat_heads} уже существует')
+            return np.loadtxt(path_log_wheat_heads)
+        
+        self._read_bboxes(cnn_model, kernel_size)
+        self.wheat_ears = [] # [ [lat, long, p], ... ]
+        self._calc_adjacent_frames()
         print('[+] нашёл пересечение кадров')
         for i in self.images:
-            print(f'{i} / {len(self.images)}', end='\r')
-            self.wheat_ears += self._calc_wheat_intersections(i)
-        self.ears_in_polygons = self._calc_wheat_head_count_in_geojsons()
+            #print(f'{i} / {len(self.images)}', end='\r')
+            #print(f'{i} / {len(self.images)}')
+            self.wheat_ears += self._calc_wheat_ears(i)
+        np.savetxt(path_log_wheat_heads, self.wheat_ears)
+        return np.array(self.wheat_ears)
 
-    def draw_wheat_plots(self):
-        ''' отрисовка числа колосьев на каждой делянке '''
-        feature_group_choropleth = folium.FeatureGroup(name='wheat plots', show=False)
-        df = pd.DataFrame(columns=['сорт', 'количество колосьев'])
-        with open(self.path_to_geojson) as f:
-            data = json.load(f)
-            num_of_polygons = len(data['features'])
-
-            max_p = np.amax(self.ears_in_polygons)
-            for i in range(num_of_polygons):
-                val = self.ears_in_polygons[i] / max_p
-                hex_color = calc_hex_color(val)
-
-                t = np.array(data['features'][i]['geometry']['coordinates'][0])
-                t[:, [0, 1]] = t[:, [1, 0]]
-
-                str_wheat_type = ''
-                try:
-                    str_wheat_type = data['features'][i]['properties']['name']
-                except:
-                    pass
-
-                folium.Polygon(t,
-                               color='#303030',
-                               opacity=0.05,
-                               fill=True,
-                               fill_color=hex_color,
-                               fill_opacity=1.0
-                               )\
-                    .add_child(folium.Popup(f'{str_wheat_type}\n{self.ears_in_polygons[i]}')) \
-                    .add_to(feature_group_choropleth)
-                df = df.append(
-                    {'сорт': str_wheat_type, 'количество колосьев': self.ears_in_polygons[i]}, ignore_index=True)
-
-        colormap = folium.LinearColormap(
-            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'count of spikes in wheat plots, pcs'
-        self.layers.append(feature_group_choropleth)
-        self.colormaps.append(colormap)
-        df.to_csv(self.path_log_plots)
-
-    def draw_protocol(self):
-        ''' отображаем корректность протокола сьёмки изображений '''
-        feature_group_protocol = folium.FeatureGroup(name='protocol', show=True)
-        img_width, img_height = 350, 233
-        for i in range(self.df_metadata.shape[0]):
-            line = self.df_metadata.loc[i]
-            filename            = line['name']
-            width_m             = line['width_m']
-            height_m            = line['height_m']
-            flight_altitude_m   = line['flight_altitude_m']
-            gimbal_yaw_deg      = line['gimbal_yaw_deg']
-            gimbal_pitch_deg    = line['gimbal_pitch_deg']
-            gimbal_roll_deg     = line['gimbal_roll_deg']
-            flight_yaw_deg      = line['flight_yaw_deg']
-            flight_pitch_deg    = line['flight_pitch_deg']
-            flight_roll_deg     = line['flight_roll_deg']
-            border              = line['border']
-            wrong_parameters = check_protocol_correctness(gimbal_pitch_deg, gimbal_roll_deg, flight_altitude_m)
-
-            popup_str = f'<b>filename: {filename}</b><br>' + \
-                        f'gimbal_yaw_deg: {gimbal_yaw_deg}º<br>' + \
-                        f'gimbal_pitch_deg: {gimbal_pitch_deg}º<br>' + \
-                        f'gimbal_roll_deg: {gimbal_roll_deg}º<br>' + \
-                        f'flight_yaw_deg: {flight_yaw_deg}º<br>' + \
-                        f'flight_pitch_deg: {flight_pitch_deg}º<br>' + \
-                        f'flight_roll_deg: {flight_roll_deg}º<br>' + \
-                        f'flight_altitude_m: {flight_altitude_m}'
-
-            # если протокол нарушен, то меняем цвет на красный и выводим ошибки
-            color_polyline = '#007800'
-            if len(wrong_parameters) > 0:
-                color_polyline = '#780000'
-                popup_str += '<br><br><b>Ошибки:</b>'
-                for wrong_parameter in wrong_parameters:
-                    popup_str += '<br>' + wrong_parameter
-
-            if np.isnan(width_m) or np.isnan(height_m):
-                img_height = int(350.0*height_m/width_m)
-            popup_str = f'''  <table style="width: 100%; vertical-align: bottom;">
-            <colgroup>
-            <col span="1" style="width: 35%; vertical-align: top;">
-            <col span="1" style="width: 65%;">
-            </colgroup>
-
-            <tr>
-                <td>{popup_str}</td>
-                <td><img src="http://127.0.0.1:9999/{self.path_field_day}/src/{filename}" width="{img_width}" height="{img_height}"></td>
-            </tr>
-            </table>'''
-
-            iframe = folium.IFrame(html=popup_str, width=600, height=270)
-            folium.PolyLine(border, color=color_polyline) \
-                  .add_child(folium.Popup(iframe)) \
-                  .add_to(feature_group_protocol)
-        feature_group_protocol.add_to(self.m)
-
-    def draw_grids(self, size_list):
-        for size in size_list:
-            self._draw_grid(size)
+    def _calc_adjacent_frames(self):
+        ''' @brief строит словарь смежных полигонов
+        формат списка:  adjacent_frames[index] = [adj_image_1, adj_image_2,...] '''
+        self.adjacent_frames = {}
+        for i1 in self.images:
+            border1 = self.df_metadata.iloc[i1]['border']
+            l = []
+            for i2 in self.images:
+                border2 = self.df_metadata.iloc[i2]['border']
+                has_intersection = False
+                polygon1 = Polygon(border1)
+                polygon2 = Polygon(border2)
+                has_intersection = polygon1.intersects(polygon2)
+                if i1 != i2 and has_intersection == True:
+                    l.append(i2)
+            self.adjacent_frames[i1] = l
     
     def _create_mask(self, index_type = 'tgi'):
         if index_type == 'tgi':
@@ -328,115 +505,6 @@ class WheatDetectionSystem():
         opening_dilation = cv2.dilate(opening, kernel_dilation, iterations = 1)
         result = cv2.bitwise_and(opening_dilation, mask_tgi)
         return result
-
-    def create_map(self):
-        ''' создаём карту и сохраняем объект карты как об приватное поле  '''
-        self.m = folium.Map(
-            [self.latitude, self.longtitude],
-            tiles=None,
-            prefer_canvas=True,
-            control_scale=True,
-            zoom_start=21,
-            zoom_control=False
-        )
-        base_map = folium.FeatureGroup(name='Basemap', overlay=True, control=False)
-        folium.TileLayer(tiles='OpenStreetMap', max_zoom=25).add_to(base_map)
-        base_map.add_to(self.m)
-
-    def save_map(self):
-        ''' соединяем слои, карты цветов и сохраняем карту '''
-        for layer in self.layers:
-            self.m.add_child(layer)
-        for colormap in self.colormaps:
-            self.m.add_child(colormap)
-
-        for layer, colormap in zip(self.layers, self.colormaps):
-            self.m.add_child(BindColormap(layer, colormap))
-
-        export_filename = f'{self.path_field_day.split("/")[1]}.geojson'
-        Draw(position='topright', export=False, filename=export_filename).add_to(self.m)
-        MeasureControl(position='bottomleft', collapsed=False).add_to(self.m)
-        folium.map.LayerControl(position='topleft', collapsed=False).add_to(self.m)
-
-        self.m.save(self.path_to_map)
-
-    # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------       
-    def _draw_grid(self, grid_size_m):
-        ''' отрисовываем квадратную сетку grid_size_m * grid_size_m '''
-        feature_group_grid = folium.map.FeatureGroup(
-            name=f'grid {grid_size_m:.2f}x{grid_size_m:.2f}м²',
-            show=False
-        )
-
-        d_lat = convert_meters_to_lat(grid_size_m)
-        d_long = convert_meters_to_long(grid_size_m, self.latitude)
-
-        delta_lat = self.lat_max - self.lat_min
-        delta_long = self.long_max - self.long_min
-        n_lat = int(delta_lat / d_lat)
-        n_long = int(delta_long / d_long)
-
-        wheat_counts = np.zeros((n_lat+1, n_long+1))
-        coordinates = np.ndarray((n_lat+1, n_long+1, 4, 2))
-        for wheat_ear in self.wheat_ears:
-            _lat, _long, p = wheat_ear
-            i = int((_lat - self.lat_min) / d_lat)
-            j = int((_long - self.long_min) / d_long)
-            wheat_counts[i][j] += p
-
-        max_p = np.amax(wheat_counts)
-
-        max_p /= grid_size_m*grid_size_m
-        lat_cut = grid_size_m * ((delta_lat - n_lat*d_lat) / d_lat)
-        long_cut = grid_size_m * ((delta_long - n_long*d_long) / d_long)
-        for i in range(n_lat):
-            j = n_long
-            wheat_counts[i][j] /= (grid_size_m*lat_cut)
-
-        for j in range(n_long):
-            i = n_lat
-            wheat_counts[i][j] /= (grid_size_m*long_cut)
-
-        wheat_counts[n_lat][n_long] /= (lat_cut*long_cut)
-
-        for i in range(n_lat):
-            for j in range(n_long):
-                if wheat_counts[i][j] > 0:
-                    wheat_counts[i][j] /= (grid_size_m**2)
-
-        # divide count of objects by region area
-        for i in range(n_lat):
-            for j in range(n_long):
-                if wheat_counts[i][j] > 0:
-                    lat_b = self.lat_min + i*d_lat
-                    lat_e = lat_b + d_lat
-                    long_b = self.long_min + j*d_long
-                    long_e = long_b + d_long
-                    coordinates[i][j] = np.array([
-                        [lat_b, long_b],
-                        [lat_b, long_e],
-                        [lat_e, long_e],
-                        [lat_e, long_b]
-                    ])
-                    value = wheat_counts[i][j] / max_p
-                    hex_color = calc_hex_color(value)
-                    folium.Rectangle(coordinates[i][j],
-                                     color='#303030',
-                                     opacity=0.05,
-                                     fill=True,
-                                     fill_color=hex_color,
-                                     fill_opacity=1.0
-                                     )\
-                        .add_child(folium.Popup(f'{wheat_counts[i][j]:.2f}')) \
-                        .add_to(feature_group_grid)
-
-        colormap = folium.LinearColormap(
-            ['#dddddd', '#00ff00'], vmin=0, vmax=max_p).to_step(5)
-        colormap.caption = 'spike density, pcs/m²'
-        self.layers.append(feature_group_grid)
-        self.colormaps.append(colormap)
 
     def _handle_image(
         self, dir,
@@ -476,10 +544,6 @@ class WheatDetectionSystem():
         dir_extention = os.path.splitext(glob.glob(f'{self.path_field_day}/{dir}/*')[0])[1]
         path_src = f'{self.path_field_day}/{dir}/{image_basename}{dir_extention}'
         image_src = cv2.imread(path_src, 0)
-        # image_src[:,:100] = 255
-        # image_src[:,-100:] = 255
-        # image_src[:100,:] = 255
-        # image_src[-100:,:] = 255
 
         img_rotated = rotate_image(image_src, -yaw_deg)
         img_rotated = img_rotated[::-1] # чтобы координатные оси совпадали
@@ -542,7 +606,7 @@ class WheatDetectionSystem():
 
         return d_images_grid, d_images_overlay
 
-    def _create_grid_from_images(self, dir, grid_size_m, grid_size_px = 50):
+    def _create_grid_from_images(self, dir, grid_size_m, grid_size_px = 100):
         ''' @brief строим сетку изображений из диретории dir
         @param dir строка папки [src/ndvi/etc.]
         @param grid_size_m размер кусочка плитки в метрах
@@ -593,8 +657,8 @@ class WheatDetectionSystem():
         self.grid_lat_max = self.grid_lat_min + i_max * d_lat
         self.grid_long_max = self.grid_long_min + j_max * d_long
 
-        for image_index in self.images:
-            print(' '*80+f'\r{image_index} / {len(self.images)}', end='\r')
+        for i, image_index in enumerate(self.images):
+            print(' '*80+f'\r{i+1} / {len(self.images)}', end='\r')
             yaw_deg = self.df_metadata.loc[image_index][self.yaw_str]
             d_images_grid, d_images_overlay = self._handle_image(
                 dir, d_images_grid, d_images_overlay,
@@ -610,20 +674,22 @@ class WheatDetectionSystem():
             cv2.imwrite(f'{subdir}/{i}_{j}.png', division[::-1])
         print(' '*80 + f'\r[+] {dir} сетка {grid_size_m:.2f}x{grid_size_m:.2f} м^2')
 
-    def draw_vegetation(self, grid_size_px = 200):
-        ''' отрисовываем долю зелёных пикселей на квадратную сетку grid_size_m * grid_size_m '''
-        grid_size_m = 0.2
-        dir = 'tgi'
-        self._create_grid_from_images(dir, grid_size_m, grid_size_px)
-        print(f'[+] плитка {dir} создана')
-        filenames = os.listdir(f'{self.path_field_day}/grid_{dir}_{grid_size_m:.2f}')
+    def _draw_vegetation_cover(
+        self,
+        method = 'tgi',
+        grid_size_m = 0.2,
+        grid_size_px = 100,
+    ):
+        self._create_grid_from_images(method, grid_size_m, grid_size_px)
+        print(f'[+] плитка {method} создана')
+        filenames = os.listdir(f'{self.path_field_day}/grid_{method}_{grid_size_m:.2f}')
 
         grid = np.ndarray((len(filenames), 3))
         for index, filename in enumerate(filenames):
             i, j = filename[:-4].split('_')
             i = int(i)
             j = int(j)
-            image = cv2.imread(f'{self.path_field_day}/grid_{dir}_{grid_size_m:.2f}/{i}_{j}.png')
+            image = cv2.imread(f'{self.path_field_day}/grid_{method}_{grid_size_m:.2f}/{i}_{j}.png')
             grid[index] = np.array([i, j, 100.0*np.mean(image / 255)])
         max_value = np.max(grid.T[2])
         grid.T[2] /=max_value
@@ -632,7 +698,7 @@ class WheatDetectionSystem():
         d_lat = convert_meters_to_lat(grid_size_m)
         d_long = convert_meters_to_long(grid_size_m, self.latitude)
         feature_group_grid = folium.map.FeatureGroup(
-            name=f'grass coverage {dir} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
+            name=f'grass coverage {method} {grid_size_m:.2f}x{grid_size_m:.2f}м²',
             show=False
         )
         # divide count of objects by region area
@@ -654,14 +720,14 @@ class WheatDetectionSystem():
                                     fill_color=hex_color,
                                     fill_opacity=1.0
                                     )\
-                    .add_child(folium.Popup(f'{i} {j}    {100*value:.2f}')) \
+                    .add_child(folium.Tooltip(f'{100*value:.2f}')) \
                     .add_to(feature_group_grid)
         colormap = folium.LinearColormap(['#dddddd', '#00ff00'], vmin=0, vmax=max_value).to_step(5)
         colormap.caption = 'share of green land, %'
         self.layers.append(feature_group_grid)
         self.colormaps.append(colormap)
 
-        self._save_to_klm(grid, dir, grid_size_m)
+        self._save_to_klm(grid, method, grid_size_m)
     
     def _save_to_klm(self, grid, data_type, grid_size_m):
         ''' @brief сохраняем сетку к .klm файл
@@ -695,16 +761,19 @@ class WheatDetectionSystem():
         f.write('\n</Folder>\n</Document></kml>')
         f.close()
 
-    def _create_tiles(self, tile_type):
-        ''' @brief собирает плитку 200x200 в большие изображения и сжимает до 1000x1000 '''
-        try_to_make_dir(f'{self.path_field_day}/tiles_{tile_type}')
-        grid_size_m = 0.2
-        dir = f'grid_{tile_type}_{grid_size_m:.2f}'
-        self._create_grid_from_images(tile_type, grid_size_m)
-        self.unite_every_k_images = 25
+    def _create_tiles(self, tile_type: str):
+        ''' @brief собирает плитку 100x100 в большие изображения и сжимает до 1250x1250 '''
+        path_to_dir_tiles = f'{self.path_field_day}/tiles_{tile_type}'
+        try_to_make_dir(path_to_dir_tiles)
+        if os.path.exists(path_to_dir_tiles):
+            print(f'[+] {path_to_dir_tiles} уже существует')
+            return None
+
+        dir = f'grid_{tile_type}_{self.grid_size_m:.2f}'
+        self._create_grid_from_images(tile_type, self.grid_size_m)
+        self.unite_every_k_images = int(5.0 / self.grid_size_m)
         filenames = glob.glob(f'{self.path_field_day}/{dir}/*')
         filenames = sorted(map(os.path.basename, filenames))
-        path = f'{self.path_field_day}/{dir}/{filenames[0]}'
         grid_size_px, _ = cv2.imread(f'{self.path_field_day}/{dir}/{filenames[0]}', 0).shape
 
         # определяем какие плитки останутся
@@ -732,28 +801,12 @@ class WheatDetectionSystem():
                 if i_tile <= i_src / self.unite_every_k_images < i_tile + 1 and j_tile <= j_src / self.unite_every_k_images < j_tile + 1:
                     im = cv2.imread(f'{self.path_field_day}/{dir}/{filename}', 0)
                     tile[tile_size - (i+1)*grid_size_px:tile_size - i*grid_size_px, j*grid_size_px:(j+1)*grid_size_px] = im#[::-1]
-                    # cv2.putText(tile, f'{i}_{j}', (i*grid_size_px,j*grid_size_px + 200), cv2.FONT_HERSHEY_COMPLEX, 2, (64, 64, 64),1,2)
-                    # cv2.putText(tile, f'{i_src}_{j_src}', (i*grid_size_px,j*grid_size_px + 100), cv2.FONT_HERSHEY_COMPLEX, 2, (64, 64, 64),1,2)
-            
-            # for i in range(unite_every_k_images):
-            #     tile[i*grid_size_px,:] = 128
-            #     tile[:,i*grid_size_px] = 128
-                #cv2.putText(tile, f'{i}_{i}', (i*grid_size_px,i*grid_size_px + 100), cv2.FONT_HERSHEY_COMPLEX, 2, (255, 255, 255),1,2)
-            tile = cv2.resize(tile, (1500, 1500))
+            tile = cv2.resize(tile, (1250, 1250))
             cv2.imwrite(f'{self.path_field_day}/tiles_{tile_type}/{i_tile}_{j_tile}.webp', tile)
 
-    def draw_tiles(self, tile_type_list):
-        for tile_type in tile_type_list:
-            if tile_type != 'src':
-                self._create_mask(tile_type)
-            self._draw_tiles(tile_type)
-        
     def _draw_tiles(self, tile_type):
-        ''' отрисовываем маски на сетке grid_size_m * grid_size_m '''
         self._create_tiles(tile_type)
-        grid_size_m = 0.2
-        unite_every_k_images = 25
-        tile_size = grid_size_m * unite_every_k_images
+        tile_size = self.grid_size_m * self.unite_every_k_images
         feature_group_grid = folium.map.FeatureGroup(
             name=f'tiles {tile_type} {tile_size:.2f}x{tile_size:.2f}м²',
             show=False
@@ -803,8 +856,9 @@ class WheatDetectionSystem():
                 coords_and_p.append([lat, long, p])
         return coords_and_p
 
-    def _calc_wheat_intersections(self, df_i):
-        ''' поворачиваем колоски по азимуту и нормируем, поподающие в несколько изображений '''
+    def _calc_wheat_ears(self, df_i):
+        ''' @brief поворачиваем колоски по азимуту и нормируем, поподающие в несколько изображений 
+        @return coords_and_p [lat, long, p] '''
         data = self.df_metadata.loc[df_i]
         is_OK       = data['is_OK']
         width_m     = data['width_m']
@@ -826,7 +880,6 @@ class WheatDetectionSystem():
 
         if is_OK or self.do_show_uncorrect:
             coords_and_p = self._read_coords_and_p(self.df_bboxes, df_i)
-            print(df_i)
             for i in range(len(coords_and_p)):
                 x, y, p = coords_and_p[i]
                 x = width_m *  (x - width_px) / width_px
@@ -838,10 +891,11 @@ class WheatDetectionSystem():
                 point = Point([dy + latitude, dx + longtitude])
                 w = 1.0
                 for j in self.adjacent_frames[df_i]:
-                    polygon = Polygon(np.array(self.image_borders[j]))
+                    border = self.df_metadata.iloc[j]['border']
+                    polygon = Polygon(np.array(border))
                     if polygon.contains(point):
                         w += 1.0
-                coords_and_p[i] = [y, x, 1.0 / w]
+                coords_and_p[i] = [dy + latitude, dx + longtitude, 1.0 / w]
             return coords_and_p
         else:
             return []
@@ -853,7 +907,7 @@ class WheatDetectionSystem():
         with open(self.path_to_geojson) as f:
             data = json.load(f)
             num_of_polygons = len(data['features'])
-            ears_in_polygons = np.ones(num_of_polygons)
+            ears_in_polygons = np.zeros(num_of_polygons)
             for i in range(num_of_polygons):
                 t = np.array(data['features'][i]['geometry']
                              ['coordinates'][0][:4])
@@ -892,12 +946,15 @@ class WheatDetectionSystem():
             <MultiGeometry><Polygon><outerBoundaryIs><LinearRing><coordinates>{coordinates_str}</coordinates></LinearRing></outerBoundaryIs></Polygon></MultiGeometry>
     </Placemark>''')
 
-    def _detect_wheat_heads(self):
+    def _detect_wheat_heads(
+            self,
+            cnn_model: str,                 # 'frcnn'
+            kernel_size: int,               # 512
+        ):
 
         results = []
 
         detection_threshold, nms_treshold = 0.6, 0.8
-        kernel_size = self.kernel_size
         stride_size = kernel_size // 2
         batch_size = 1
         num_classes = 2
@@ -911,13 +968,13 @@ class WheatDetectionSystem():
            transforms.ToTensor(),
         ])
 
-        if self.cnn_model == 'frcnn':
+        if cnn_model == 'frcnn':
             path_to_weight = 'weights/fasterrcnn_resnet50_fpn_best.pth'
             model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=False, pretrained_backbone=False)
             in_features = model.roi_heads.box_predictor.cls_score.in_features
             model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
             model.load_state_dict(torch.load(path_to_weight, map_location=device))
-        elif self.cnn_model == 'effdet':
+        elif cnn_model == 'effdet':
             path_to_weight = 'weights/fold0-best-all-states.bin'
             # source: https://www.kaggle.com/shonenkov/inference-efficientdet
             model = load_net(path_to_weight)
@@ -926,7 +983,7 @@ class WheatDetectionSystem():
         model.to(device)
 
         test_data_loader = DataLoader(
-            WheatTestDataset(f'{self.path_field_day}/src', stride_size, val_transforms),
+            WheatTestDataset(self.images, f'{self.path_field_day}/src', stride_size, val_transforms),
             batch_size=1,
             shuffle=False,
             drop_last=False
@@ -952,15 +1009,15 @@ class WheatDetectionSystem():
 
             for k in range(patches.shape[0]//batch_size):
                 batch = patches[k*batch_size:(k+1)*batch_size].to(device)
-                if self.cnn_model == 'effdet':
+                if cnn_model == 'effdet':
                     batch = transforms.functional.resize(batch, 512)
                 outputs = model(batch)
                 for i, image in enumerate(batch):
                     # преобразуем в numpy
-                    if self.cnn_model == 'frcnn':
+                    if cnn_model == 'frcnn':
                         boxes = outputs[i]['boxes'].data.cpu().numpy()
                         scores = outputs[i]['scores'].data.cpu().numpy()
-                    elif self.cnn_model == 'effdet':
+                    elif cnn_model == 'effdet':
                         boxes = outputs[i].detach().cpu().numpy()[:,:4]    
                         scores = outputs[i].detach().cpu().numpy()[:,4]
                     # фильтруем совсем слабые результаты
@@ -984,7 +1041,7 @@ class WheatDetectionSystem():
         test_df = pd.DataFrame(
             results, columns=['image_id', 'PredictionString'])
         test_df.to_csv(self.path_log_bboxes, index=False)
-        print(f'Saved file {self.path_log_bboxes}.')
+        print(f'[+] saved file {self.path_log_bboxes}.')
 
 
 class BindColormap(MacroElement):
@@ -1198,23 +1255,6 @@ def calc_image_border(latitude_deg, longtitude_deg, width_m, height_m, yaw_deg):
     return border
 
 
-def calc_adjacency_list(image_borders):
-    ''' @brief строит список смежных полигонов
-    @return adjacent_list[adj_image_1, adj_image_2,...] '''
-    adjacent_list = []
-    for i1, border1 in enumerate(image_borders):
-        l = []
-        for i2, border2 in enumerate(image_borders):
-            has_intersection = False
-            polygon1 = Polygon(border1)
-            polygon2 = Polygon(border2)
-            has_intersection = polygon1.intersects(polygon2)
-            if i1 != i2 and has_intersection == True:
-                l.append(i2)
-        adjacent_list.append(l)
-    return adjacent_list
-
-
 def calc_hex_color(value):
     ''' @brief отображает значение [0,1] в цвет [серый, зелёный]
     max_p:  val = 1  ->  (0,255,0)
@@ -1230,11 +1270,11 @@ def calc_hex_color(value):
 # https://discuss.pytorch.org/t/how-to-load-images-from-different-folders-in-the-same-batch/18942
 class WheatTestDataset(Dataset):
 
-    def __init__(self, dir, stride_size, augs=None):
+    def __init__(self, image_names, dir, stride_size, augs=None):
         self.dir = dir
-        self.image_names = os.listdir(self.dir)
+        self.image_names = image_names
         self.augs = augs
-        path = os.path.join(self.dir, self.image_names[0])
+        path = os.path.join(dir, image_names[0])
         H, W, _ = cv2.imread(path).shape
         pad_w = stride_size - W % stride_size
         pad_h = stride_size - H % stride_size
