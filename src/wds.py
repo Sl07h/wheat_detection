@@ -764,11 +764,10 @@ class WheatDetectionSystem():
     def _create_tiles(self, tile_type: str):
         ''' @brief собирает плитку 100x100 в большие изображения и сжимает до 1250x1250 '''
         path_to_dir_tiles = f'{self.path_field_day}/tiles_{tile_type}'
-        try_to_make_dir(path_to_dir_tiles)
         if os.path.exists(path_to_dir_tiles):
             print(f'[+] {path_to_dir_tiles} уже существует')
             return None
-
+        try_to_make_dir(path_to_dir_tiles)
         dir = f'grid_{tile_type}_{self.grid_size_m:.2f}'
         self._create_grid_from_images(tile_type, self.grid_size_m)
         self.unite_every_k_images = int(5.0 / self.grid_size_m)
@@ -983,7 +982,7 @@ class WheatDetectionSystem():
         model.to(device)
 
         test_data_loader = DataLoader(
-            WheatTestDataset(self.images, f'{self.path_field_day}/src', stride_size, val_transforms),
+            WheatTestDataset(self.df_metadata, self.images, f'{self.path_field_day}/src', stride_size, val_transforms),
             batch_size=1,
             shuffle=False,
             drop_last=False
@@ -1270,11 +1269,12 @@ def calc_hex_color(value):
 # https://discuss.pytorch.org/t/how-to-load-images-from-different-folders-in-the-same-batch/18942
 class WheatTestDataset(Dataset):
 
-    def __init__(self, image_names, dir, stride_size, augs=None):
+    def __init__(self, df_metadata, images, dir, stride_size, augs=None):
+        
+        self.image_names = list(df_metadata['name'][images].values)
         self.dir = dir
-        self.image_names = image_names
         self.augs = augs
-        path = os.path.join(dir, image_names[0])
+        path = os.path.join(dir, self.image_names[0])
         H, W, _ = cv2.imread(path).shape
         pad_w = stride_size - W % stride_size
         pad_h = stride_size - H % stride_size
