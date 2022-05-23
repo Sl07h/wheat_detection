@@ -5,7 +5,8 @@ exiftool*
 maps
 weights
 wds_venv
-research
+research/*
+!research/train
 */__pycache__
 .vscode
 *zip
